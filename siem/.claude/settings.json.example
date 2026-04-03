@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "opensearch": {
-      "command": "./siem/opensearch-mcp.sh",
+      "command": "/absolute/path/to/siem/opensearch-mcp.sh",
       "env": {}
     }
   }
