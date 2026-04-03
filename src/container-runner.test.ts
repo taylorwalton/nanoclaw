@@ -15,8 +15,18 @@ vi.mock('./config.js', () => ({
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
+  OLLAMA_ADMIN_TOOLS: false,
+  ONECLI_URL: 'http://127.0.0.1:10255',
   TIMEZONE: 'America/Los_Angeles',
 }));
+
+// Mock OneCLI SDK
+vi.mock('@onecli-sh/sdk', () => {
+  class OneCLI {
+    applyContainerConfig = vi.fn().mockResolvedValue(true);
+  }
+  return { OneCLI };
+});
 
 // Mock logger
 vi.mock('./logger.js', () => ({
