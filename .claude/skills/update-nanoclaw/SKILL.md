@@ -188,7 +188,7 @@ After validation succeeds, check if the update introduced any breaking changes.
 Determine which CHANGELOG entries are new by diffing against the backup tag:
 - `git diff <backup-tag-from-step-1>..HEAD -- CHANGELOG.md`
 
-Parse the diff output for lines starting with `+[BREAKING]`. Each such line is one breaking change entry. The format is:
+Parse the diff output for lines that contain `[BREAKING]` anywhere in the line. Each such line is one breaking change entry. The format is:
 ```
 [BREAKING] <description>. Run `/<skill-name>` to <action>.
 ```
@@ -233,3 +233,9 @@ Tell the user:
 - Restart the service to apply changes:
   - If using launchd: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist && launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist`
   - If running manually: restart `npm run dev`
+
+
+## Diagnostics
+
+1. Use the Read tool to read `.claude/skills/update-nanoclaw/diagnostics.md`.
+2. Follow every step in that file before finishing.
