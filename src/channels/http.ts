@@ -185,7 +185,9 @@ export class HttpChannel implements Channel {
       // onTurnComplete already closed the stream when the agent finished the turn.
       // This is just a safety net in case onTurnComplete wasn't called.
       if (this.currentWriter) {
-        logger.warn('HTTP channel: setTyping(false) called with active writer — closing via safety net');
+        logger.warn(
+          'HTTP channel: setTyping(false) called with active writer — closing via safety net',
+        );
         const event = JSON.stringify({ type: 'done' });
         this.currentWriter.res.write(`data: ${event}\n\n`);
         this.currentWriter.res.end();

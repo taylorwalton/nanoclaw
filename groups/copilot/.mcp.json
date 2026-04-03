@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "opensearch": {
+      "command": "/workspace/extra/siem/opensearch-mcp.sh"
+    }
+  }
+}

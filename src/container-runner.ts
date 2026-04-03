@@ -260,14 +260,22 @@ async function buildContainerArgs(
   if (onecliApplied) {
     logger.info({ containerName }, 'OneCLI gateway config applied');
   } else {
-    const { CLAUDE_CODE_OAUTH_TOKEN } = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']);
+    const { CLAUDE_CODE_OAUTH_TOKEN } = readEnvFile([
+      'CLAUDE_CODE_OAUTH_TOKEN',
+    ]);
     if (CLAUDE_CODE_OAUTH_TOKEN) {
       // Long-lived OAuth token (generated via `claude setup-token`) — inject
       // directly so containers authenticate without a separate login.
       args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}`);
-      logger.info({ containerName }, 'Injecting CLAUDE_CODE_OAUTH_TOKEN into container');
+      logger.info(
+        { containerName },
+        'Injecting CLAUDE_CODE_OAUTH_TOKEN into container',
+      );
     } else {
-      logger.warn({ containerName }, 'No credentials available — container may fail to authenticate');
+      logger.warn(
+        { containerName },
+        'No credentials available — container may fail to authenticate',
+      );
     }
   }
 

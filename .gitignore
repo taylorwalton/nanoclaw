@@ -13,10 +13,14 @@ logs/
 groups/*
 !groups/main/
 !groups/global/
+!groups/copilot/
 groups/main/*
 groups/global/*
+groups/copilot/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+!groups/copilot/CLAUDE.md
+!groups/copilot/.mcp.json
 
 # Secrets
 *.keys.json
