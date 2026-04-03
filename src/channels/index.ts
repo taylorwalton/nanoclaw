@@ -14,3 +14,6 @@ import './telegram.js';
 
 // emacs
 import './emacs.js';
+
+// http (CoPilot gateway)
+import './http.js';
