@@ -211,14 +211,69 @@ CONTAINER_RUNTIME=docker ./container/build.sh
 ```
 
 **7. Start the service**
-```bash
-# macOS
-cp com.nanoclaw.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 
-# Linux
-cp nanoclaw.service ~/.config/systemd/user/
+macOS:
+```bash
+sed -e "s|{{NODE_PATH}}|$(which node)|g" \
+    -e "s|{{PROJECT_ROOT}}|$(pwd)|g" \
+    -e "s|{{HOME}}|$HOME|g" \
+    launchd/com.nanoclaw.plist > ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+```
+
+Linux (running as root — system-level service):
+```bash
+mkdir -p logs
+cat > /etc/systemd/system/nanoclaw.service <<EOF
+[Unit]
+Description=NanoClaw Personal Assistant
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$(which node) $(pwd)/dist/index.js
+WorkingDirectory=$(pwd)
+Restart=always
+RestartSec=5
+KillMode=process
+Environment=HOME=$HOME
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin
+StandardOutput=append:$(pwd)/logs/nanoclaw.log
+StandardError=append:$(pwd)/logs/nanoclaw.error.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now nanoclaw
+```
+
+Linux (non-root — user-level service):
+```bash
+mkdir -p ~/.config/systemd/user logs
+cat > ~/.config/systemd/user/nanoclaw.service <<EOF
+[Unit]
+Description=NanoClaw Personal Assistant
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$(which node) $(pwd)/dist/index.js
+WorkingDirectory=$(pwd)
+Restart=always
+RestartSec=5
+KillMode=process
+Environment=HOME=$HOME
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin
+StandardOutput=append:$(pwd)/logs/nanoclaw.log
+StandardError=append:$(pwd)/logs/nanoclaw.error.log
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
 systemctl --user enable --now nanoclaw
+loginctl enable-linger  # keep service running after SSH logout
 ```
 
 **8. Verify**
