@@ -676,7 +676,9 @@ async function main(): Promise<void> {
 
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
   // No real secrets exist in the container environment.
-  const sdkEnv: Record<string, string | undefined> = { ...process.env };
+  // DEBUG_CLAUDE_AGENT_SDK=1 causes the SDK to pipe cli.js stderr instead of ignoring it,
+  // so we can see the actual error message when the process exits with code 1.
+  const sdkEnv: Record<string, string | undefined> = { ...process.env, DEBUG_CLAUDE_AGENT_SDK: '1' };
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
