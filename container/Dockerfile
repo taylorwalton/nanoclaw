@@ -32,6 +32,11 @@ RUN apt-get update && apt-get install -y \
 RUN python3 -m venv /opt/opensearch-mcp \
     && /opt/opensearch-mcp/bin/pip install --quiet opensearch-mcp-server
 
+# Install copilot-mcp-server into a system venv (used by the CoPilot MCP wrapper)
+RUN python3 -m venv /opt/copilot-mcp \
+    && /opt/copilot-mcp/bin/pip install --quiet \
+       "git+https://github.com/socfortress/copilot-mcp-server.git"
+
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
