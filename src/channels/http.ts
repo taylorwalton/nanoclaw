@@ -63,34 +63,66 @@ export class HttpChannel implements Channel {
 
 2. If no rows are returned, stop here. Do not send any message.
 
-3. For each alert returned:
-   a. Fetch the raw event from OpenSearch using index_name and index_id.
-   b. Extract IOCs from the event (IPs, domains, hashes, process names).
-   c. For any external IP or domain found, run a quick VirusTotal check
-      via WebSearch: "<value>" site:virustotal.com
-   d. Note the rule.level, rule.description, and rule.mitre.tactic if present.
+3. For each alert, run a full investigation:
 
-4. Send a single digest message (via send_message) formatted as:
+   a. In parallel, fetch from OpenSearch using index_name and index_id:
+      - get_document (index_name, index_id) → the full raw alert event
+      - get_index (index_name) → the field mapping for this index
+      Use the mapping to confirm exact field names and types (keyword vs text)
+      before building any search or aggregation query.
 
-   🚨 **SOC Alert Digest** — <timestamp>
-   <N> new OPEN alert(s) across <M> customer(s)
+   b. Detect the alert type from the raw event (check in order):
+      - Look at rule.groups (array) for an entry matching sysmon_event_<N>
+        (e.g. sysmon_event_1, sysmon_event_3, sysmon_event_7).
+      - If not found, map data.win.system.eventID:
+          1  → sysmon_event_1  (Process Creation)
+          3  → sysmon_event_3  (Network Connection)
+          7  → sysmon_event_7  (Image Load / DLL)
+          11 → sysmon_event_11 (File Create)
+          22 → sysmon_event_22 (DNS Query)
 
-   For each alert:
-   ---
-   **[Customer: <customer_code>]** <alert_name>
-   - Asset: <asset_name> (Agent: <agent_id>)
-   - Source: <source> | Rule level: <level> | MITRE: <tactic>
-   - Created: <alert_creation_time>
-   - IOCs: <list any extracted IOCs>
-   - Threat intel: <VT verdict or "no external IOCs found">
+   c. Load the investigation template:
+      - Read /workspace/group/prompts/<alert_type>.txt
+        (e.g. /workspace/group/prompts/sysmon_event_1.txt)
+      - If the file exists, follow the analysis steps it defines.
+        Substitute template variables as follows:
+          {{ alert }}                      → the full raw OpenSearch event JSON
+          {{ event_id }}                   → the numeric event ID (e.g. 1)
+          {{ pipeline | default('wazuh') }} → wazuh
+          {{ virustotal_results }}         → your VT results after threat intel
+      - If no template file exists, use the default steps below.
 
-   End with a 1-sentence overall assessment of urgency.`,
+   d. Default investigation steps (when no template matches):
+      - Extract all IOCs from the raw event:
+          IPs     → data.win.eventdata.destinationIp, data.srcip, data.dstip
+          Domains → data.win.eventdata.queryName, data.win.eventdata.destinationHostname
+          Hashes  → data.win.eventdata.hashes (MD5, SHA1, SHA256)
+          Processes → data.win.eventdata.image, data.win.eventdata.parentImage
+          Commands  → data.win.eventdata.commandLine
+      - For each external IP or domain: WebSearch "<value>" site:virustotal.com
+      - For each SHA256 hash: WebFetch https://www.virustotal.com/gui/file/<hash>
+      - Note rule.level, rule.description, and rule.mitre.tactic
+
+   e. Send a full investigation report via send_message for each alert:
+
+      🔍 **SOC Investigation** — <alert_name>
+      Customer: <customer_code> | Asset: <asset_name> | Created: <alert_creation_time>
+
+      <Full investigation findings following the template format, or:>
+
+      **Alert Summary**: rule description, severity level, MITRE tactic/technique
+      **IOC Analysis**: table of IOCs with type and VT verdict
+      **Severity Assessment**: Critical / High / Medium / Low with reasoning
+      **Recommended Actions**: specific, actionable next steps`,
     };
 
     const fullTask = { ...task, last_run: null, last_result: null };
     fullTask.next_run = computeNextRun(fullTask);
     createTask(fullTask);
-    logger.info({ taskId: TASK_ID }, 'Seeded CoPilot alert digest scheduled task');
+    logger.info(
+      { taskId: TASK_ID },
+      'Seeded CoPilot alert digest scheduled task',
+    );
   }
 
   async connect(): Promise<void> {

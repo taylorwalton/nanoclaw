@@ -41,11 +41,53 @@ ORDER BY a.alert_creation_time DESC
 LIMIT 20;
 ```
 
-### Step 2 — Fetch the raw SIEM event from OpenSearch
+### Step 2 — Fetch the raw SIEM event and index mapping from OpenSearch
 
-Use `index_name` and `index_id` from the asset row with the OpenSearch `get_document` tool to retrieve the full original event. This contains the raw log fields that MySQL does not store — process names, command lines, network destinations, file hashes, user accounts, MITRE tactic mappings, rule details, etc.
+Run both calls in parallel using `index_name` and `index_id` from the asset row:
 
-Always fetch the raw event before drawing conclusions. The MySQL alert is a summary; OpenSearch holds the ground truth.
+1. **`get_document`** — retrieves the full original event. This contains the raw log fields that MySQL does not store — process names, command lines, network destinations, file hashes, user accounts, MITRE tactic mappings, rule details, etc.
+2. **`get_index`** — retrieves the field mappings for `index_name`. This tells you the exact field names present in this index and their types (`keyword` vs `text` vs `long`, etc.).
+
+**Why the mapping matters:** field types determine which DSL query to use:
+- `keyword` fields → use `term` (exact, case-sensitive match)
+- `text` fields → use `match` or `match_phrase` (analyzed, case-insensitive)
+- Numeric/date fields → use `range`
+
+Some indices use dot notation (`rule.groups`), others use underscores (`rule_groups`). The mapping is the authoritative source — never assume field names. Check it before writing any search or aggregation query.
+
+Always fetch the raw event and the index mapping before drawing conclusions. The MySQL alert is a summary; OpenSearch holds the ground truth.
+
+### Step 2.5 — Select the alert-type investigation template
+
+After fetching the raw OpenSearch event, detect the alert type and load its investigation template before extracting IOCs. The template provides targeted analysis steps for that specific alert category.
+
+**Detection — check in this order:**
+
+1. **From the raw OpenSearch document** — look at `rule.groups` (array). Find any entry matching the pattern `sysmon_event_<N>` (e.g., `sysmon_event_1`, `sysmon_event_3`, `sysmon_event_7`). Use that as the template key.
+2. **From the OpenSearch document** — if `rule.groups` has no sysmon match, check `data.win.system.eventID` and map it:
+   - `1` → `sysmon_event_1` (Process Creation)
+   - `3` → `sysmon_event_3` (Network Connection)
+   - `7` → `sysmon_event_7` (Image Load / DLL)
+   - `11` → `sysmon_event_11` (File Create)
+   - `22` → `sysmon_event_22` (DNS Query)
+3. **From the MySQL alert context** — if both OpenSearch checks fail, query `incident_management_alertcontext` for the alert's `context` JSON. In that JSON the fields use underscores: `rule_groups` and `data_win_system_eventID`.
+
+**Loading the template:**
+
+Once you have the template key (e.g., `sysmon_event_1`), read:
+```
+/workspace/group/prompts/<key>.txt
+```
+
+If the file exists, follow the analysis steps defined in it. Fill in the template variables when presenting your findings:
+- `{{ alert }}` → the full raw OpenSearch event JSON
+- `{{ event_id }}` → the numeric Sysmon event ID (e.g., `1`)
+- `{{ pipeline | default('wazuh') }}` → `wazuh`
+- `{{ virustotal_results }}` → your VirusTotal results after running threat intel (complete Steps 3–4 first, then substitute)
+
+If no template file exists for the detected type, continue with the default Steps 3–6 below.
+
+---
 
 ### Step 3 — Extract IOCs from the raw event
 
