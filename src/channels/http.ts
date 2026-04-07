@@ -1,7 +1,7 @@
 import http from 'http';
 import path from 'path';
 
-import { createTask, getTaskById } from '../db.js';
+import { createTask, getTaskById, getTasksForGroup } from '../db.js';
 import { logger } from '../logger.js';
 import { computeNextRun } from '../task-scheduler.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -22,6 +22,8 @@ export class HttpChannel implements Channel {
 
   private server: http.Server | null = null;
   private opts: ChannelOpts;
+  private startedAt = Date.now();
+  private activeInvestigations = 0;
 
   // FIFO queue: each POST /message enqueues a writer; setTyping(true) dequeues it
   private pendingQueue: SseWriter[] = [];
@@ -188,6 +190,96 @@ export class HttpChannel implements Channel {
         return;
       }
 
+      if (req.method === 'GET' && req.url === '/status') {
+        const tasks = getTasksForGroup(COPILOT_GROUP_FOLDER);
+        const uptime = Math.floor((Date.now() - this.startedAt) / 1000);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'ok',
+            uptime_seconds: uptime,
+            active_investigations: this.activeInvestigations,
+            pending_queue_depth: this.pendingQueue.length,
+            scheduled_tasks: tasks.map((t) => ({
+              id: t.id,
+              status: t.status,
+              schedule_type: t.schedule_type,
+              schedule_value: t.schedule_value,
+              next_run: t.next_run,
+              last_run: t.last_run,
+            })),
+          }),
+        );
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/investigate') {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          let parsed: {
+            alert_id?: number;
+            customer_code?: string;
+            triggered_by?: string;
+          } = {};
+          try {
+            parsed = JSON.parse(body);
+          } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            return;
+          }
+
+          const { alert_id, customer_code } = parsed;
+          if (!alert_id || !customer_code) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({ error: 'alert_id and customer_code required' }),
+            );
+            return;
+          }
+
+          const triggered_by = parsed.triggered_by || 'webhook';
+          const jobId = `copilot-inv-${alert_id}-${Date.now()}`;
+
+          const prompt = `You are running a targeted SOC investigation triggered by CoPilot. Follow the full investigation workflow from CLAUDE.md.
+
+Alert to investigate:
+- alert_id: ${alert_id}
+- customer_code: ${customer_code}
+- job_id: ${jobId}
+- triggered_by: ${triggered_by}
+
+Steps:
+1. Skip Step 0 deduplication — this job has already been registered by the caller with id="${jobId}". Call UpdateAiAnalystJobTool(job_id="${jobId}", status="running") immediately.
+2. Pull the alert from MySQL using alert_id=${alert_id} and customer_code="${customer_code}".
+3. Follow Steps 2–6 from CLAUDE.md exactly (fetch raw event + index mapping, detect alert type, load template, extract IOCs, threat intel, SIEM correlation).
+4. Write back to CoPilot using job_id="${jobId}" and the report/IOC tools.
+5. Send the full investigation report via send_message.`;
+
+          this.opts.onMessage(COPILOT_JID, {
+            id: `investigate-${jobId}`,
+            chat_jid: COPILOT_JID,
+            sender: 'copilot-webhook',
+            sender_name: 'CoPilot',
+            content: prompt,
+            timestamp: new Date().toISOString(),
+            is_from_me: false,
+          });
+
+          logger.info(
+            { alert_id, customer_code, jobId, triggered_by },
+            'HTTP channel: investigation queued',
+          );
+
+          res.writeHead(202, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ job_id: jobId, status: 'queued' }));
+        });
+        return;
+      }
+
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
@@ -272,7 +364,11 @@ export class HttpChannel implements Channel {
       this.server!.listen(COPILOT_HTTP_PORT, () => {
         logger.info({ port: COPILOT_HTTP_PORT }, 'HTTP channel listening');
         console.log(`\n  HTTP channel: http://localhost:${COPILOT_HTTP_PORT}`);
-        console.log(`  POST /message  { "message": "...", "sender": "..." }`);
+        console.log(`  POST /message     { "message": "...", "sender": "..." }`);
+        console.log(
+          `  POST /investigate { "alert_id": 123, "customer_code": "acme" }`,
+        );
+        console.log(`  GET  /status`);
         console.log(`  GET  /health\n`);
         resolve();
       });
@@ -292,6 +388,7 @@ export class HttpChannel implements Channel {
 
   async setTyping(_jid: string, isTyping: boolean): Promise<void> {
     if (isTyping) {
+      this.activeInvestigations++;
       // Agent is starting — dequeue the next waiting SSE writer
       if (this.pendingQueue.length > 0) {
         this.currentWriter = this.pendingQueue.shift()!;
@@ -306,6 +403,7 @@ export class HttpChannel implements Channel {
       // setTyping(false) fires when the container exits (~30 min idle timeout).
       // onTurnComplete already closed the stream when the agent finished the turn.
       // This is just a safety net in case onTurnComplete wasn't called.
+      this.activeInvestigations = Math.max(0, this.activeInvestigations - 1);
       if (this.currentWriter) {
         logger.warn(
           'HTTP channel: setTyping(false) called with active writer — closing via safety net',
@@ -322,6 +420,7 @@ export class HttpChannel implements Channel {
   async onTurnComplete(_jid: string): Promise<void> {
     // Called when result.status === 'success' — close the SSE stream immediately
     // rather than waiting for the container's idle timeout.
+    this.activeInvestigations = Math.max(0, this.activeInvestigations - 1);
     if (this.currentWriter) {
       const event = JSON.stringify({ type: 'done' });
       this.currentWriter.res.write(`data: ${event}\n\n`);

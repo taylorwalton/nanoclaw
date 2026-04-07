@@ -280,7 +280,7 @@ Once the write-back API and NanoClaw endpoints are in place, CoPilot can surface
 | 5 | CoPilot write-back REST API endpoints | CoPilot | ✅ Done |
 | 6 | CoPilot MCP server (`copilot-mcp-server`) + NanoClaw integration | Both | ✅ Done |
 | 7 | Scheduled task deduplication + full write-back with real tool names | NanoClaw | ✅ Done |
-| 8 | `POST /investigate` endpoint in NanoClaw | NanoClaw | Planned |
-| 9 | `GET /status` + `GET /jobs/:alertId` endpoints | NanoClaw | Planned |
+| 8 | `POST /investigate` endpoint in NanoClaw | NanoClaw | ✅ Done |
+| 9 | `GET /status` endpoint in NanoClaw | NanoClaw | ✅ Done |
 | 10 | Additional prompt templates (events 3, 7, 11, 22) | NanoClaw | Planned |
 | 11 | CoPilot UI: alert analysis tab + status badges | CoPilot | Planned |
