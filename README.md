@@ -128,7 +128,7 @@ The agent checks for Ollama at startup. If it's not running, the investigation c
 ### 1. Clone and install
 
 ```bash
-git clone <your-fork-url> talon
+git clone https://github.com/taylorwalton/talon.git talon
 cd talon
 npm install && npm run build
 ```
