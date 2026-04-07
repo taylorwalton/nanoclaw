@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/talon-logo.jpg" alt="Talon" width="400">
+</p>
+
 # Talon
 
 **Automated AI SOC analyst for the [SOCfortress CoPilot](https://github.com/socfortress/CoPilot) stack.**
