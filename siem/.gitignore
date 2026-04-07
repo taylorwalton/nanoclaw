@@ -1,3 +1,4 @@
 .env
 .venv/
 .claude/settings.json
+anon_proxy/__pycache__/
