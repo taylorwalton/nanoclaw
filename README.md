@@ -1,14 +1,29 @@
-<p align="center">
-  <img src="assets/talon-logo.jpg" alt="Talon" width="400">
-</p>
+<h1 align="center">
 
-# Talon
+<a href="https://www.socfortress.co"><img src="https://raw.githubusercontent.com/socfortress/CoPilot/refs/heads/main/frontend/src/assets/images/socfortress_logo_default_dark.svg" width="250" height="167"></a>
 
-**Automated AI SOC analyst for the [SOCfortress CoPilot](https://github.com/socfortress/CoPilot) stack.**
+<img src="assets/talon-logo.jpg" alt="Talon" width="350">
 
-Talon runs as a background service alongside CoPilot. When a new alert arrives, it pulls the raw event from your Wazuh/OpenSearch SIEM, enriches it with threat intelligence, correlates across your environment, and writes a structured investigation report — including severity assessment, IOC table, and recommended actions — directly back into CoPilot before notifying the analyst.
+Talon
 
-Built on [NanoClaw](https://github.com/qwibitai/nanoclaw): agents run in isolated Linux containers via the Claude Agent SDK, so the AI has real tool access without touching your host.
+[![Medium](https://img.shields.io/badge/Medium-12100E?style=for-the-badge&logo=medium&logoColor=white)](https://socfortress.medium.com/)
+[![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UC4EUQtTxeC8wGrKRafI6pZg)](https://www.youtube.com/@taylorwalton_socfortress/videos)
+[![Discord Shield](https://discordapp.com/api/guilds/871419379999469568/widget.png?style=shield)](https://discord.gg/UN3pNBzaEQ)
+[![GitHub Sponsors](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/taylorwalton)
+
+[![Get in Touch](https://img.shields.io/badge/📧%20Get%20in%20Touch-Friendly%20Support%20Awaits!-blue?style=for-the-badge)](https://www.socfortress.co/contact_form.html)
+
+</h1>
+
+<h4 align="center">
+
+Talon is an automated AI SOC analyst built by <a href="https://www.socfortress.co">SOCfortress</a> for the <a href="https://github.com/socfortress/CoPilot">CoPilot</a> stack. It runs as a background service alongside CoPilot — pulling raw events from your Wazuh/OpenSearch SIEM, enriching them with threat intelligence, correlating across your environment, and writing structured investigation reports with severity assessments and recommended actions directly back into CoPilot.
+
+📚 <strong>Docs:</strong> <a href="https://docs.socfortress.co">docs.socfortress.co</a>
+
+</h4>
+
+---
 
 ---
 
@@ -362,6 +377,20 @@ To add a new alert type, create the corresponding `.txt` file — no code change
 
 ---
 
+## Help
+
+You can reach us on [Discord](https://discord.gg/UN3pNBzaEQ) or by [📧](mailto:info@socfortress.co) if you have any question, issue, or idea!
+
+Check out the full SOCfortress video tutorial series on [![YouTube](https://img.shields.io/badge/YouTube-%23FF0000.svg?style=for-the-badge&logo=YouTube&logoColor=white)](https://www.youtube.com/@taylorwalton_socfortress/videos)
+
+## Sponsoring
+
+If you find this project useful and want to support continued development, consider becoming a sponsor:
+
+[![GitHub Sponsors](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/taylorwalton)
+
+---
+
 ## Based On
 
 Talon is a fork of [NanoClaw](https://github.com/qwibitai/nanoclaw), a minimal Claude Agent SDK harness where agents run in isolated Linux containers. The core orchestration engine, container runner, channel system, and IPC layer are NanoClaw. Everything in `groups/copilot/`, `siem/`, `mysql/`, `copilot-mcp/`, `ollama/`, and `src/channels/http.ts` is purpose-built for the SOCfortress stack.
@@ -370,4 +399,4 @@ Talon is a fork of [NanoClaw](https://github.com/qwibitai/nanoclaw), a minimal C
 
 ## License
 
-MIT
+The contents of this repository are available under the [MIT license](LICENSE).
