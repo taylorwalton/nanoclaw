@@ -276,11 +276,11 @@ Once the write-back API and NanoClaw endpoints are in place, CoPilot can surface
 | 1 | Alert-type prompt templates (`sysmon_event_1.txt`) | NanoClaw | ✅ Done |
 | 2 | Investigation workflow + index mapping step (CLAUDE.md) | NanoClaw | ✅ Done |
 | 3 | Upgraded scheduled task (full investigation per alert) | NanoClaw | ✅ Done |
-| 4 | MySQL schema: `ai_analyst_job/report/ioc` tables | CoPilot | Planned |
-| 5 | CoPilot write-back REST API endpoints | CoPilot | In progress |
-| 6 | CoPilot MCP tools for agent write-back | CoPilot | In progress |
-| 7 | Scheduled task deduplication (skip existing jobs) | NanoClaw | Pending MCP tools |
-| 8 | `POST /investigate` endpoint in NanoClaw | NanoClaw | Pending MCP tools |
-| 9 | `GET /status` + `GET /jobs/:alertId` endpoints | NanoClaw | Pending |
+| 4 | MySQL schema: `ai_analyst_job/report/ioc` tables | CoPilot | ✅ Done |
+| 5 | CoPilot write-back REST API endpoints | CoPilot | ✅ Done |
+| 6 | CoPilot MCP server (`copilot-mcp-server`) + NanoClaw integration | Both | ✅ Done |
+| 7 | Scheduled task deduplication + full write-back with real tool names | NanoClaw | ✅ Done |
+| 8 | `POST /investigate` endpoint in NanoClaw | NanoClaw | Planned |
+| 9 | `GET /status` + `GET /jobs/:alertId` endpoints | NanoClaw | Planned |
 | 10 | Additional prompt templates (events 3, 7, 11, 22) | NanoClaw | Planned |
 | 11 | CoPilot UI: alert analysis tab + status badges | CoPilot | Planned |
