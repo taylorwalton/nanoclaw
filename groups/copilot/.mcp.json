@@ -11,6 +11,9 @@
     },
     "copilot": {
       "command": "/workspace/extra/copilot-mcp/copilot-mcp.sh"
+    },
+    "ollama": {
+      "command": "/workspace/extra/ollama/ollama-mcp.sh"
     }
   }
 }

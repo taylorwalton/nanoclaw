@@ -45,13 +45,24 @@ Token definitions live in `siem/anon_proxy/fields.yaml` and are updated via git 
 
 Sensitive data retrieved from MCP tools (raw SIEM events, alert details, customer records) should be analyzed locally using Ollama wherever possible. The cloud model (Claude) acts as the **orchestrator** — deciding what to fetch and what to do next. Ollama acts as the **local analyst** — interpreting the raw sensitive content.
 
+### Availability check — do this first
+
+Ollama is **optional**. Before any investigation, check if it's available:
+
+```
+mcp__ollama__ollama_list_models()
+```
+
+- **If the call succeeds** — Ollama is running. Use it for the steps marked ✅ below.
+- **If the call fails or returns an error** — Ollama is not installed or not running. Skip all local analysis steps and continue the investigation without them. Do not report this as an error; just note in the report that local analysis was unavailable.
+
 ### When to use Ollama
 
 | Step | Use Ollama | Reason |
 |------|-----------|--------|
-| Raw SIEM event interpretation | ✅ Yes | Full event JSON contains PII, hostnames, command lines, file paths |
-| IOC extraction from raw event | ✅ Yes | Sensitive context should be processed locally |
-| Alert type detection from event content | ✅ Yes | Avoids sending raw data to cloud for classification |
+| Raw SIEM event interpretation | ✅ Yes (if available) | Full event JSON contains PII, hostnames, command lines, file paths |
+| IOC extraction from raw event | ✅ Yes (if available) | Sensitive context should be processed locally |
+| Alert type detection from event content | ✅ Yes (if available) | Avoids sending raw data to cloud for classification |
 | Threat intel lookups (VirusTotal, Shodan) | ❌ No | IOC values are already extracted/abstracted |
 | MITRE ATT&CK lookups | ❌ No | Public information, no sensitive context |
 | Report writing and recommendations | ❌ No | Based on Ollama's summary, not raw data |
@@ -62,8 +73,8 @@ Sensitive data retrieved from MCP tools (raw SIEM events, alert details, custome
 After fetching a raw event from OpenSearch, immediately pass it to Ollama before reasoning about the content:
 
 ```
-ollama_generate(
-  model="<best available model from ollama_list_models>",
+mcp__ollama__ollama_generate(
+  model="<best available from ollama_list_models>",
   prompt=<raw event JSON>,
   system="You are a security analyst. Analyze this SIEM alert and extract:
 1. All IOCs: IP addresses, domains, file hashes, process names, commands, usernames
@@ -76,11 +87,13 @@ Be concise and factual. Do not speculate beyond what the data shows."
 
 Use **only the Ollama output** for the rest of the investigation — IOC extraction, severity assessment, and report writing. Do not re-reference the raw event JSON directly when reasoning or reporting.
 
+If Ollama is unavailable, extract IOCs from the anonymized event (field values will already be tokens from `opensearch_anon`) and proceed to threat intel.
+
 ### Model selection
 
-Call `ollama_list_models` at the start of each investigation to find the best available model. Prefer larger models for security analysis — a 7B+ parameter model will significantly outperform a 1B model on complex event interpretation. If only a small model (≤3B) is available, note this in the report and flag that a larger model would improve analysis quality.
+Call `mcp__ollama__ollama_list_models` to find the best available model. Prefer larger models for security analysis. If only a small model (≤3B) is available, note it in the report.
 
-Recommended models for security analysis (pull via `ollama_pull_model` if not present):
+Recommended models (pull via `mcp__ollama__ollama_pull_model` if not present):
 - `llama3.2:3b` — good baseline, fast
 - `qwen2.5:7b` — strong analytical capability
 - `mistral:7b` — solid for structured extraction tasks
@@ -135,7 +148,7 @@ Run these in parallel:
 
 1. **`mcp__opensearch_anon__get_document`** — retrieves the full original event, with PII fields already anonymized (usernames → USER_N, internal IPs → IP_INT_N, hostnames → HOST_N). Security-relevant fields (hashes, external IPs, domains, process paths, rule metadata) are preserved intact.
 2. **`mcp__opensearch__get_index`** — retrieves the field mappings for `index_name`. Field names are not PII so the raw server is fine here.
-3. **`ollama_list_models`** — identify the best available local model for analysis.
+3. **`mcp__ollama__ollama_list_models`** — check if Ollama is available and identify the best local model. If this call fails, skip local analysis entirely.
 
 **Why the mapping matters:** field types determine which DSL query to use:
 - `keyword` fields → use `term` (exact, case-sensitive match)
@@ -312,9 +325,9 @@ Deliver the report via `send_message` with these sections:
 - `mcp__mysql__*` — CoPilot database (read-only): alerts, cases, agents, customers, integrations
 - `mcp__opensearch_anon__*` — **Preferred** anonymizing SIEM proxy: same tools as opensearch but PII is tokenized before reaching cloud context. Includes built-in `deanonymize` tool.
 - `mcp__opensearch__*` — Raw SIEM access (use only for non-sensitive queries like index listing, cluster health)
-- `ollama_list_models` — list locally installed Ollama models
-- `ollama_generate` — run inference against a local model (model, prompt, system?)
-- `ollama_pull_model` / `ollama_delete_model` / `ollama_show_model` / `ollama_list_running` — model management
+- `mcp__ollama__ollama_list_models` — list locally installed models (**call first** to check availability; skip all Ollama steps if this fails)
+- `mcp__ollama__ollama_generate` — run inference against a local model (model, prompt, system?)
+- `mcp__ollama__ollama_pull_model` / `ollama_delete_model` / `ollama_show_model` / `ollama_list_running` — model management
 - `mcp__copilot__*` — CoPilot REST API (never write MySQL directly — always use these):
   - `GetCustomersTool` — list all customers
   - `CreateAiAnalystJobTool` — register a new investigation job at the start of each investigation

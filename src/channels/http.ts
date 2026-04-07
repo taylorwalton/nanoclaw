@@ -169,6 +169,11 @@ export class HttpChannel implements Channel {
             containerPath: 'copilot-mcp',
             readonly: true,
           },
+          {
+            hostPath: path.join(process.cwd(), 'ollama'),
+            containerPath: 'ollama',
+            readonly: true,
+          },
         ],
       },
     };
@@ -364,7 +369,9 @@ Steps:
       this.server!.listen(COPILOT_HTTP_PORT, () => {
         logger.info({ port: COPILOT_HTTP_PORT }, 'HTTP channel listening');
         console.log(`\n  HTTP channel: http://localhost:${COPILOT_HTTP_PORT}`);
-        console.log(`  POST /message     { "message": "...", "sender": "..." }`);
+        console.log(
+          `  POST /message     { "message": "...", "sender": "..." }`,
+        );
         console.log(
           `  POST /investigate { "alert_id": 123, "customer_code": "acme" }`,
         );
