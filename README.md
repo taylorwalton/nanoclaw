@@ -1,192 +1,144 @@
-<p align="center">
-  <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
-</p>
+# Talon
 
-<p align="center">
-  An AI assistant that runs agents securely in their own containers. Lightweight, built to be easily understood and completely customized for your needs.
-</p>
+**Automated AI SOC analyst for the [SOCfortress CoPilot](https://github.com/socfortress/CoPilot) stack.**
 
-<p align="center">
-  <a href="https://nanoclaw.dev">nanoclaw.dev</a>&nbsp; • &nbsp;
-  <a href="https://docs.nanoclaw.dev">docs</a>&nbsp; • &nbsp;
-  <a href="README_zh.md">中文</a>&nbsp; • &nbsp;
-  <a href="README_ja.md">日本語</a>&nbsp; • &nbsp;
-  <a href="https://discord.gg/VDdww8qS42"><img src="https://img.shields.io/discord/1470188214710046894?label=Discord&logo=discord&v=2" alt="Discord" valign="middle"></a>&nbsp; • &nbsp;
-  <a href="repo-tokens"><img src="repo-tokens/badge.svg" alt="34.9k tokens, 17% of context window" valign="middle"></a>
-</p>
+Talon runs as a background service alongside CoPilot. When a new alert arrives, it pulls the raw event from your Wazuh/OpenSearch SIEM, enriches it with threat intelligence, correlates across your environment, and writes a structured investigation report — including severity assessment, IOC table, and recommended actions — directly back into CoPilot before notifying the analyst.
+
+Built on [NanoClaw](https://github.com/qwibitai/nanoclaw): agents run in isolated Linux containers via the Claude Agent SDK, so the AI has real tool access without touching your host.
 
 ---
 
-## Why I Built NanoClaw
+## What It Does
 
-[OpenClaw](https://github.com/openclaw/openclaw) is an impressive project, but I wouldn't have been able to sleep if I had given complex software I didn't understand full access to my life. OpenClaw has nearly half a million lines of code, 53 config files, and 70+ dependencies. Its security is at the application level (allowlists, pairing codes) rather than true OS-level isolation. Everything runs in one Node process with shared memory.
+- **Automated Tier 2 investigations** — every OPEN alert is investigated end-to-end: SIEM raw event → IOC extraction → VirusTotal / Shodan / AbuseIPDB → MITRE ATT&CK correlation → structured report
+- **Two trigger paths** — real-time via `POST /investigate` (CoPilot calls this when an alert is created) and a 15-minute scheduled sweep as a safety net
+- **Writes back to CoPilot** — job status, full report, and enriched IOCs are persisted in CoPilot's database via its REST API; no direct database writes
+- **Privacy-aware by default** — an anonymizing MCP proxy intercepts raw SIEM events and replaces PII (usernames, hostnames, internal IPs) with session tokens before they reach the cloud model; a built-in `deanonymize` tool restores real values in the final report
+- **Optional local LLM analysis** — if [Ollama](https://ollama.com) is running, the agent routes raw event interpretation through a local model instead of the cloud; no config needed if Ollama is on the same host
+- **Alert-type prompt templates** — per-alert-type investigation guides (Sysmon Event 1, 3, 7, 11, 22) are loaded automatically based on the alert's `rule.groups` field; add new templates without touching code
 
-NanoClaw provides that same core functionality, but in a codebase small enough to understand: one process and a handful of files. Claude agents run in their own Linux containers with filesystem isolation, not merely behind permission checks.
-
-## Quick Start
-
-```bash
-gh repo fork qwibitai/nanoclaw --clone
-cd nanoclaw
-claude
-```
-
-<details>
-<summary>Without GitHub CLI</summary>
-
-1. Fork [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw) on GitHub (click the Fork button)
-2. `git clone https://github.com/<your-username>/nanoclaw.git`
-3. `cd nanoclaw`
-4. `claude`
-
-</details>
-
-Then run `/setup`. Claude Code handles everything: dependencies, authentication, container setup and service configuration.
-
-> **Note:** Commands prefixed with `/` (like `/setup`, `/add-whatsapp`) are [Claude Code skills](https://code.claude.com/docs/en/skills). Type them inside the `claude` CLI prompt, not in your regular terminal. If you don't have Claude Code installed, get it at [claude.com/product/claude-code](https://claude.com/product/claude-code).
-
-## Philosophy
-
-**Small enough to understand.** One process, a few source files and no microservices. If you want to understand the full NanoClaw codebase, just ask Claude Code to walk you through it.
-
-**Secure by isolation.** Agents run in Linux containers (Apple Container on macOS, or Docker) and they can only see what's explicitly mounted. Bash access is safe because commands run inside the container, not on your host.
-
-**Built for the individual user.** NanoClaw isn't a monolithic framework; it's software that fits each user's exact needs. Instead of becoming bloatware, NanoClaw is designed to be bespoke. You make your own fork and have Claude Code modify it to match your needs.
-
-**Customization = code changes.** No configuration sprawl. Want different behavior? Modify the code. The codebase is small enough that it's safe to make changes.
-
-**AI-native.**
-- No installation wizard; Claude Code guides setup.
-- No monitoring dashboard; ask Claude what's happening.
-- No debugging tools; describe the problem and Claude fixes it.
-
-**Skills over features.** Instead of adding features (e.g. support for Telegram) to the codebase, contributors submit [claude code skills](https://code.claude.com/docs/en/skills) like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
-
-**Best harness, best model.** NanoClaw runs on the Claude Agent SDK, which means you're running Claude Code directly. Claude Code is highly capable and its coding and problem-solving capabilities allow it to modify and expand NanoClaw and tailor it to each user.
-
-## What It Supports
-
-- **Multi-channel messaging** - Talk to your assistant from WhatsApp, Telegram, Discord, Slack, or Gmail. Add channels with skills like `/add-whatsapp` or `/add-telegram`. Run one or many at the same time.
-- **Isolated group context** - Each group has its own `CLAUDE.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted to it.
-- **Main channel** - Your private channel (self-chat) for admin control; every group is completely isolated
-- **Scheduled tasks** - Recurring jobs that run Claude and can message you back
-- **Web access** - Search and fetch content from the Web
-- **Container isolation** - Agents are sandboxed in Docker (macOS/Linux), [Docker Sandboxes](docs/docker-sandboxes.md) (micro VM isolation), or Apple Container (macOS)
-- **Credential security** - Agents never hold raw API keys. Outbound requests route through [OneCLI's Agent Vault](https://github.com/onecli/onecli), which injects credentials at request time and enforces per-agent policies and rate limits.
-- **Agent Swarms** - Spin up teams of specialized agents that collaborate on complex tasks
-- **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
-
-## Usage
-
-Talk to your assistant with the trigger word (default: `@Andy`):
-
-```
-@Andy send an overview of the sales pipeline every weekday morning at 9am (has access to my Obsidian vault folder)
-@Andy review the git history for the past week each Friday and update the README if there's drift
-@Andy every Monday at 8am, compile news on AI developments from Hacker News and TechCrunch and message me a briefing
-```
-
-From the main channel (your self-chat), you can manage groups and tasks:
-```
-@Andy list all scheduled tasks across groups
-@Andy pause the Monday briefing task
-@Andy join the Family Chat group
-```
-
-## Customizing
-
-NanoClaw doesn't use configuration files. To make changes, just tell Claude Code what you want:
-
-- "Change the trigger word to @Bob"
-- "Remember in the future to make responses shorter and more direct"
-- "Add a custom greeting when I say good morning"
-- "Store conversation summaries weekly"
-
-Or run `/customize` for guided changes.
-
-The codebase is small enough that Claude can safely modify it.
-
-## Contributing
-
-**Don't add features. Add skills.**
-
-If you want to add Telegram support, don't create a PR that adds Telegram to the core codebase. Instead, fork NanoClaw, make the code changes on a branch, and open a PR. We'll create a `skill/telegram` branch from your PR that other users can merge into their fork.
-
-Users then run `/add-telegram` on their fork and get clean code that does exactly what they need, not a bloated system trying to support every use case.
-
-### RFS (Request for Skills)
-
-Skills we'd like to see:
-
-**Communication Channels**
-- `/add-signal` - Add Signal as a channel
-
-## Requirements
-
-- macOS, Linux, or Windows (via WSL2)
-- Node.js 20+
-- [Claude Code](https://claude.ai/download)
-- [Apple Container](https://github.com/apple/container) (macOS) or [Docker](https://docker.com/products/docker-desktop) (macOS/Linux)
+---
 
 ## Architecture
 
 ```
-Channels --> SQLite --> Polling loop --> Container (Claude Agent SDK) --> Response
+┌─────────────────────────────────────────────────────┐
+│                 CoPilot (FastAPI)                    │
+│                                                      │
+│  Alert created → POST /investigate ──────────────┐   │
+│  GET /status, GET /jobs/:alertId ← Talon HTTP API │   │
+│                                                   │   │
+│  Write-back API (MCP tools):                      │   │
+│    POST /api/ai_analyst/jobs          ←───────────┘   │
+│    POST /api/ai_analyst/reports                       │
+│    POST /api/ai_analyst/iocs                          │
+│  MySQL: ai_analyst_job / report / ioc                 │
+└───────────────────────┬───────────────────────────────┘
+                        │ read-only MCP        ▲ REST write-back
+                        ▼                      │
+┌─────────────────────────────────────────────────────┐
+│                   Talon (Node.js)                    │
+│                                                      │
+│  HTTP channel (port 3100)                            │
+│    POST /investigate  ← CoPilot triggers this        │
+│    POST /message      ← ad-hoc analyst prompts       │
+│    GET  /status       ← queue + job overview         │
+│    GET  /jobs/:id     ← per-alert report status      │
+│    GET  /health                                      │
+│                                                      │
+│  Scheduled task (every 15 min)                       │
+│    Queries MySQL for OPEN alerts with no job row     │
+│    Runs full investigation per alert                 │
+│                                                      │
+│  SOC agent container                                 │
+│    groups/copilot/CLAUDE.md  ← investigation flow    │
+│    groups/copilot/prompts/   ← per-alert templates   │
+└─────────────────────────────────────────────────────┘
+         │ MCP tools (read-only)
+         ▼
+┌────────────────────────────────────────────────────────────┐
+│  opensearch-mcp     — raw SIEM queries                     │
+│  opensearch_anon    — anonymizing proxy (PII → tokens)     │
+│  mysql-mcp          — CoPilot DB (alerts, assets, agents)  │
+│  copilot-mcp        — CoPilot REST API write-back          │
+│  ollama (optional)  — local LLM for sensitive event data   │
+└────────────────────────────────────────────────────────────┘
 ```
 
-Single Node.js process. Channels are added via skills and self-register at startup — the orchestrator connects whichever ones have credentials present. Agents execute in isolated Linux containers with filesystem isolation. Only mounted directories are accessible. Per-group message queue with concurrency control. IPC via filesystem.
+For the full architecture and design decisions, see:
+- [docs/COPILOT_INTEGRATION.md](docs/COPILOT_INTEGRATION.md) — trigger paths, MySQL schema, MCP tool reference, implementation roadmap
+- [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — design philosophy and architecture decisions
 
-For the full architecture details, see the [documentation site](https://docs.nanoclaw.dev/concepts/architecture).
+---
 
-Key files:
-- `src/index.ts` - Orchestrator: state, message loop, agent invocation
-- `src/channels/registry.ts` - Channel registry (self-registration at startup)
-- `src/ipc.ts` - IPC watcher and task processing
-- `src/router.ts` - Message formatting and outbound routing
-- `src/group-queue.ts` - Per-group queue with global concurrency limit
-- `src/container-runner.ts` - Spawns streaming agent containers
-- `src/task-scheduler.ts` - Runs scheduled tasks
-- `src/db.ts` - SQLite operations (messages, groups, sessions, state)
-- `groups/*/CLAUDE.md` - Per-group memory
+## Privacy & Anonymization
 
-## SOC Agent (CoPilot) Deployment
+Raw SIEM events contain sensitive data — usernames, internal hostnames, RFC1918 IPs. Talon's anonymizing MCP proxy intercepts all document and search results before they reach the Claude cloud API and replaces known PII fields with consistent session tokens:
 
-This fork includes a built-in HTTP channel and SOC agent group (`groups/copilot/`) that exposes NanoClaw as an API for the [CoPilot gateway](https://github.com/socfortress/copilot-gateway). Agents have live access to a Wazuh/OpenSearch SIEM via MCP tools.
+| Token | Replaces |
+|---|---|
+| `USER_1`, `USER_2`, … | Usernames, account names (`data_win_eventdata_user`, etc.) |
+| `HOST_1`, `HOST_2`, … | Hostnames, computer names (`agent_name`, etc.) |
+| `IP_INT_1`, … | Internal / RFC1918 IP addresses |
+| `EMAIL_1`, … | Email addresses |
 
-### Client Setup
+Security-critical values — file hashes, external IPs, domains, process paths, rule metadata — pass through unchanged so threat intel lookups work normally. Before the final report is written, the agent calls a built-in `deanonymize` tool to restore real names and IPs so the analyst sees accurate output.
 
-**Prerequisites:** Claude Code CLI, Docker, Node.js 20+, Git, a running OpenSearch/Wazuh SIEM, a running CoPilot MySQL/MariaDB instance.
+Field definitions live in [`siem/anon_proxy/fields.yaml`](siem/anon_proxy/fields.yaml) — add new fields and `git pull` to distribute to all deployments.
 
-**1. Clone and install**
+See [docs/ANON_PROXY.md](docs/ANON_PROXY.md) for a full walkthrough of the proxy flow.
+
+---
+
+## Local LLM Support (Ollama)
+
+If [Ollama](https://ollama.com) is running on the same host, Talon automatically routes raw event interpretation through a local model rather than the cloud. This keeps the most sensitive step — reading the full raw event and extracting IOCs — entirely on-premises.
+
+The agent checks for Ollama at startup. If it's not running, the investigation continues without it — no errors, no configuration required. See step 8 of the deployment guide below for setup.
+
+---
+
+## Deployment Guide
+
+### Prerequisites
+
+- Docker
+- Node.js 20+
+- A running OpenSearch / Wazuh SIEM
+- A running CoPilot instance (MySQL/MariaDB + FastAPI)
+- A [Claude Code](https://claude.ai/download) OAuth token
+
+### 1. Clone and install
+
 ```bash
-git clone <your-fork-url> nanoclaw
-cd nanoclaw
+git clone <your-fork-url> talon
+cd talon
 npm install && npm run build
 ```
 
-**2. Get a Claude OAuth token**
+### 2. Get a Claude OAuth token
 
-This allows agents to authenticate inside their containers without an interactive login:
 ```bash
 claude setup-token
 # Copy the sk-ant-oat01-... token that is printed
 ```
 
-**3. Create `.env`**
+### 3. Create `.env`
+
 ```bash
 cat > .env <<EOF
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 
 # Optional: webhook endpoint for the 15-minute SOC alert digest
-# If set, the scheduled digest task POSTs results here as JSON: { "text": "...", "timestamp": "..." }
-# WEBHOOK_URL=https://your-endpoint.example.com/nanoclaw-digest
+# WEBHOOK_URL=https://your-endpoint.example.com/talon-digest
 # WEBHOOK_SECRET=optional-bearer-token
 EOF
 ```
 
-**4. Create the mount allowlist**
+### 4. Create the mount allowlist
 
-This controls which host directories can be mounted into agent containers. It must live outside the project root so agents cannot modify it:
+Controls which host directories can be mounted into agent containers. Lives outside the project root so agents cannot modify it:
+
 ```bash
 mkdir -p ~/.config/nanoclaw
 cat > ~/.config/nanoclaw/mount-allowlist.json <<EOF
@@ -195,7 +147,7 @@ cat > ~/.config/nanoclaw/mount-allowlist.json <<EOF
     {
       "path": "$(pwd)",
       "allowReadWrite": false,
-      "description": "NanoClaw project root"
+      "description": "Talon project root"
     }
   ],
   "blockedPatterns": [],
@@ -204,57 +156,61 @@ cat > ~/.config/nanoclaw/mount-allowlist.json <<EOF
 EOF
 ```
 
-**5. Configure SIEM credentials**
+### 5. Configure SIEM credentials
+
 ```bash
 cp siem/.env.example siem/.env
 # Edit siem/.env — set OPENSEARCH_HOSTS, OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD
 ```
 
-**6. Configure MySQL credentials**
+### 6. Configure MySQL credentials
+
 ```bash
 bash mysql/setup.sh
 # Edit mysql/.env — set MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASS, MYSQL_DB
 ```
 
-**7. Configure CoPilot MCP credentials**
+### 7. Configure CoPilot MCP credentials
+
 ```bash
 bash copilot-mcp/setup.sh
 # Edit copilot-mcp/.env — set COPILOT_URL, COPILOT_USERNAME, COPILOT_PASSWORD
 ```
 
-> **Note:** If CoPilot is running on the same host as NanoClaw, use `host.docker.internal` instead of `127.0.0.1` so the agent container can reach it:
+> **Note:** If CoPilot is on the same host as Talon, use `host.docker.internal` instead of `127.0.0.1`:
 > ```
 > COPILOT_URL=http://host.docker.internal:5000
 > ```
 
-**8. Configure Ollama (optional — for local model analysis)**
+### 8. Configure Ollama (optional)
 
-If you want the SOC agent to use a local LLM for privacy-aware event analysis, install [Ollama](https://ollama.com) and pull at least one model:
+If you want the agent to use a local LLM for privacy-aware event analysis:
+
 ```bash
 # Install Ollama from https://ollama.com, then pull a model:
-ollama pull qwen2.5:7b   # recommended for security analysis
-# or: ollama pull llama3.2:3b  (lighter, faster)
+ollama pull qwen2.5:7b    # recommended
+# or: ollama pull llama3.2:3b  (lighter)
 # or: ollama pull mistral:7b
 ```
 
-No credential setup is required — the agent auto-detects Ollama on the default port. If you need to override the endpoint (e.g. Ollama is on a separate machine):
+No `.env` is needed if Ollama is on the same machine — the agent container reaches it via `host.docker.internal:11434` automatically. To point at a remote Ollama server:
+
 ```bash
 cp ollama/.env.example ollama/.env
 # Edit ollama/.env — set OLLAMA_HOST=http://<host>:11434
 ```
 
-> **Note:** If NanoClaw and Ollama are both running on the same machine, no `.env` is needed. The agent container reaches Ollama via `host.docker.internal:11434` automatically.
->
-> If Ollama is not installed or not running, the agent skips local analysis and continues the investigation without it — no errors, no config required.
+If Ollama is not installed or not running, the agent skips local analysis silently and continues the investigation without it.
 
-**9. Build the container**
+### 9. Build the container
+
 ```bash
 CONTAINER_RUNTIME=docker ./container/build.sh
 ```
 
-**10. Start the service**
+### 10. Start the service
 
-macOS:
+**macOS:**
 ```bash
 sed -e "s|{{NODE_PATH}}|$(which node)|g" \
     -e "s|{{PROJECT_ROOT}}|$(pwd)|g" \
@@ -263,12 +219,12 @@ sed -e "s|{{NODE_PATH}}|$(which node)|g" \
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 ```
 
-Linux (running as root — system-level service):
+**Linux (system service):**
 ```bash
 mkdir -p logs
-cat > /etc/systemd/system/nanoclaw.service <<EOF
+cat > /etc/systemd/system/talon.service <<EOF
 [Unit]
-Description=NanoClaw Personal Assistant
+Description=Talon SOC Analyst
 After=network.target
 
 [Service]
@@ -280,22 +236,22 @@ RestartSec=5
 KillMode=process
 Environment=HOME=$HOME
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin
-StandardOutput=append:$(pwd)/logs/nanoclaw.log
-StandardError=append:$(pwd)/logs/nanoclaw.error.log
+StandardOutput=append:$(pwd)/logs/talon.log
+StandardError=append:$(pwd)/logs/talon.error.log
 
 [Install]
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now nanoclaw
+systemctl enable --now talon
 ```
 
-Linux (non-root — user-level service):
+**Linux (user service):**
 ```bash
 mkdir -p ~/.config/systemd/user logs
-cat > ~/.config/systemd/user/nanoclaw.service <<EOF
+cat > ~/.config/systemd/user/talon.service <<EOF
 [Unit]
-Description=NanoClaw Personal Assistant
+Description=Talon SOC Analyst
 After=network.target
 
 [Service]
@@ -307,18 +263,19 @@ RestartSec=5
 KillMode=process
 Environment=HOME=$HOME
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin
-StandardOutput=append:$(pwd)/logs/nanoclaw.log
-StandardError=append:$(pwd)/logs/nanoclaw.error.log
+StandardOutput=append:$(pwd)/logs/talon.log
+StandardError=append:$(pwd)/logs/talon.error.log
 
 [Install]
 WantedBy=default.target
 EOF
 systemctl --user daemon-reload
-systemctl --user enable --now nanoclaw
-loginctl enable-linger  # keep service running after SSH logout
+systemctl --user enable --now talon
+loginctl enable-linger
 ```
 
-**11. Verify**
+### 11. Verify
+
 ```bash
 curl http://localhost:3100/health
 
@@ -332,84 +289,80 @@ curl -s -N -X POST http://localhost:3100/message \
   -H "Content-Type: application/json" \
   -d '{"message": "Use the copilot MCP tool to list all customers.", "sender": "test"}'
 
-# Test Ollama connectivity (optional — only if Ollama is installed)
+# Test Ollama (optional — only if installed)
 curl -s -N -X POST http://localhost:3100/message \
   -H "Content-Type: application/json" \
   -d '{"message": "List available Ollama models.", "sender": "test"}'
 ```
 
-### Per-Client Customization
+---
+
+## Per-Deployment Configuration
 
 | File | Purpose |
 |------|---------|
-| `siem/.env` | OpenSearch credentials — gitignored, client-specific |
-| `mysql/.env` | CoPilot MySQL credentials — gitignored, client-specific |
-| `copilot-mcp/.env` | CoPilot REST API credentials — gitignored, client-specific |
-| `ollama/.env` | Optional Ollama endpoint override (`OLLAMA_HOST`) — gitignored, omit if using defaults |
+| `siem/.env` | OpenSearch credentials — gitignored |
+| `mysql/.env` | CoPilot MySQL credentials — gitignored |
+| `copilot-mcp/.env` | CoPilot REST API credentials — gitignored |
+| `ollama/.env` | Optional Ollama host override — gitignored, omit if using defaults |
+| `.env` | `CLAUDE_CODE_OAUTH_TOKEN`, `WEBHOOK_URL`, `WEBHOOK_SECRET` — gitignored |
 | `groups/copilot/CLAUDE.md` | SOC agent identity, known assets, ongoing investigations |
 | `groups/copilot/prompts/` | Per-alert-type investigation templates (e.g. `sysmon_event_1.txt`) |
-| `.env` | `CLAUDE_CODE_OAUTH_TOKEN`, `WEBHOOK_URL`, `WEBHOOK_SECRET` — gitignored |
+| `siem/anon_proxy/fields.yaml` | PII field definitions for the anonymizing proxy |
 | `~/.config/nanoclaw/mount-allowlist.json` | Mount security policy — outside repo, tamper-proof |
 
-Append client-specific context (asset inventory, business hours, crown jewels) to the bottom of `groups/copilot/CLAUDE.md`.
+Append client-specific context (asset inventory, known-good IP ranges, crown jewel assets, business hours) to the bottom of `groups/copilot/CLAUDE.md`.
 
-## FAQ
+---
 
-**Why Docker?**
+## Adding Alert-Type Templates
 
-Docker provides cross-platform support (macOS, Linux and even Windows via WSL2) and a mature ecosystem. On macOS, you can optionally switch to Apple Container via `/convert-to-apple-container` for a lighter-weight native runtime. For additional isolation, [Docker Sandboxes](docs/docker-sandboxes.md) run each container inside a micro VM.
+Investigation templates live in `groups/copilot/prompts/`. Each file is a plain-text guide with template variables that the agent fills in at runtime.
 
-**Can I run this on Linux or Windows?**
+| File | Alert type |
+|------|-----------|
+| `sysmon_event_1.txt` | Process Creation (Sysmon Event 1) |
+| `sysmon_event_3.txt` | Network Connection (Event 3) |
+| `sysmon_event_7.txt` | Image Load / DLL (Event 7) |
+| `sysmon_event_11.txt` | File Create (Event 11) |
+| `sysmon_event_22.txt` | DNS Query (Event 22) |
 
-Yes. Docker is the default runtime and works on macOS, Linux, and Windows (via WSL2). Just run `/setup`.
+To add a new alert type, create the corresponding `.txt` file — no code changes required. The agent detects the type from `rule.groups` in the raw event and loads the matching template automatically.
 
-**Is this secure?**
+---
 
-Agents run in containers, not behind application-level permission checks. They can only access explicitly mounted directories. Credentials never enter the container — outbound API requests route through [OneCLI's Agent Vault](https://github.com/onecli/onecli), which injects authentication at the proxy level and supports rate limits and access policies. You should still review what you're running, but the codebase is small enough that you actually can. See the [security documentation](https://docs.nanoclaw.dev/concepts/security) for the full security model.
+## Key Source Files
 
-**Why no configuration files?**
+| File | Purpose |
+|------|---------|
+| `src/index.ts` | Orchestrator: message loop, agent invocation |
+| `src/channels/http.ts` | HTTP channel: `/investigate`, `/status`, `/jobs/:id`, `/message` |
+| `src/task-scheduler.ts` | 15-minute scheduled alert sweep |
+| `src/container-runner.ts` | Spawns agent containers with mounts |
+| `groups/copilot/CLAUDE.md` | SOC agent investigation workflow |
+| `groups/copilot/.mcp.json` | MCP server registry (opensearch, mysql, copilot, ollama) |
+| `siem/anon_proxy/anon_proxy.py` | Anonymizing MCP proxy |
+| `siem/anon_proxy/fields.yaml` | PII field definitions (git-pullable) |
+| `container/Dockerfile` | Agent container image |
 
-We don't want configuration sprawl. Every user should customize NanoClaw so that the code does exactly what they want, rather than configuring a generic system. If you prefer having config files, you can tell Claude to add them.
+---
 
-**Can I use third-party or open-source models?**
+## Documentation
 
-Yes. NanoClaw supports any Claude API-compatible model endpoint. Set these environment variables in your `.env` file:
+| Doc | Contents |
+|-----|---------|
+| [docs/COPILOT_INTEGRATION.md](docs/COPILOT_INTEGRATION.md) | Full CoPilot integration architecture, MySQL schema, MCP tool reference, implementation roadmap |
+| [docs/ANON_PROXY.md](docs/ANON_PROXY.md) | Anonymizing proxy deep-dive: flow, token types, preserved fields, de-anonymization, extending `fields.yaml` |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Design philosophy and architecture decisions |
+| [docs/SECURITY.md](docs/SECURITY.md) | Container isolation model and security boundaries |
 
-```bash
-ANTHROPIC_BASE_URL=https://your-api-endpoint.com
-ANTHROPIC_AUTH_TOKEN=your-token-here
-```
+---
 
-This allows you to use:
-- Local models via [Ollama](https://ollama.ai) with an API proxy
-- Open-source models hosted on [Together AI](https://together.ai), [Fireworks](https://fireworks.ai), etc.
-- Custom model deployments with Anthropic-compatible APIs
+## Based On
 
-Note: The model must support the Anthropic API format for best compatibility.
+Talon is a fork of [NanoClaw](https://github.com/qwibitai/nanoclaw), a minimal Claude Agent SDK harness where agents run in isolated Linux containers. The core orchestration engine, container runner, channel system, and IPC layer are NanoClaw. Everything in `groups/copilot/`, `siem/`, `mysql/`, `copilot-mcp/`, `ollama/`, and `src/channels/http.ts` is purpose-built for the SOCfortress stack.
 
-**How do I debug issues?**
-
-Ask Claude Code. "Why isn't the scheduler running?" "What's in the recent logs?" "Why did this message not get a response?" That's the AI-native approach that underlies NanoClaw.
-
-**Why isn't the setup working for me?**
-
-If you have issues, during setup, Claude will try to dynamically fix them. If that doesn't work, run `claude`, then run `/debug`. If Claude finds an issue that is likely affecting other users, open a PR to modify the setup SKILL.md.
-
-**What changes will be accepted into the codebase?**
-
-Only security fixes, bug fixes, and clear improvements will be accepted to the base configuration. That's all.
-
-Everything else (new capabilities, OS compatibility, hardware support, enhancements) should be contributed as skills.
-
-This keeps the base system minimal and lets every user customize their installation without inheriting features they don't want.
-
-## Community
-
-Questions? Ideas? [Join the Discord](https://discord.gg/VDdww8qS42).
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for breaking changes, or the [full release history](https://docs.nanoclaw.dev/changelog) on the documentation site.
+---
 
 ## License
 
