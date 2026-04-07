@@ -227,6 +227,26 @@ bash copilot-mcp/setup.sh
 > COPILOT_URL=http://host.docker.internal:5000
 > ```
 
+**8. Configure Ollama (optional — for local model analysis)**
+
+If you want the SOC agent to use a local LLM for privacy-aware event analysis, install [Ollama](https://ollama.com) and pull at least one model:
+```bash
+# Install Ollama from https://ollama.com, then pull a model:
+ollama pull qwen2.5:7b   # recommended for security analysis
+# or: ollama pull llama3.2:3b  (lighter, faster)
+# or: ollama pull mistral:7b
+```
+
+No credential setup is required — the agent auto-detects Ollama on the default port. If you need to override the endpoint (e.g. Ollama is on a separate machine):
+```bash
+cp ollama/.env.example ollama/.env
+# Edit ollama/.env — set OLLAMA_HOST=http://<host>:11434
+```
+
+> **Note:** If NanoClaw and Ollama are both running on the same machine, no `.env` is needed. The agent container reaches Ollama via `host.docker.internal:11434` automatically.
+>
+> If Ollama is not installed or not running, the agent skips local analysis and continues the investigation without it — no errors, no config required.
+
 **9. Build the container**
 ```bash
 CONTAINER_RUNTIME=docker ./container/build.sh
@@ -311,6 +331,11 @@ curl -s -N -X POST http://localhost:3100/message \
 curl -s -N -X POST http://localhost:3100/message \
   -H "Content-Type: application/json" \
   -d '{"message": "Use the copilot MCP tool to list all customers.", "sender": "test"}'
+
+# Test Ollama connectivity (optional — only if Ollama is installed)
+curl -s -N -X POST http://localhost:3100/message \
+  -H "Content-Type: application/json" \
+  -d '{"message": "List available Ollama models.", "sender": "test"}'
 ```
 
 ### Per-Client Customization
@@ -320,6 +345,7 @@ curl -s -N -X POST http://localhost:3100/message \
 | `siem/.env` | OpenSearch credentials — gitignored, client-specific |
 | `mysql/.env` | CoPilot MySQL credentials — gitignored, client-specific |
 | `copilot-mcp/.env` | CoPilot REST API credentials — gitignored, client-specific |
+| `ollama/.env` | Optional Ollama endpoint override (`OLLAMA_HOST`) — gitignored, omit if using defaults |
 | `groups/copilot/CLAUDE.md` | SOC agent identity, known assets, ongoing investigations |
 | `groups/copilot/prompts/` | Per-alert-type investigation templates (e.g. `sysmon_event_1.txt`) |
 | `.env` | `CLAUDE_CODE_OAUTH_TOKEN`, `WEBHOOK_URL`, `WEBHOOK_SECRET` — gitignored |
