@@ -290,13 +290,27 @@ Use `mcp__opensearch_anon__search_documents` for all correlation queries — res
 
 Run the write-back and the analyst message in parallel once analysis is complete.
 
-#### 6a — De-anonymize the report draft
+#### 6a — De-anonymize and sanitize the report draft
 
 Before submitting to CoPilot or sending to the analyst, pass your full draft through:
 ```
 mcp__opensearch_anon__deanonymize(text=<full report draft>)
 ```
 This replaces all session tokens (USER_1, HOST_2, IP_INT_3, etc.) with their original values so the analyst sees accurate names and IPs. Use the de-anonymized text for all subsequent write-back and delivery steps.
+
+**Sanitize before submitting `report_markdown`:** Ollama output may contain stray control characters or invalid UTF-8 that breaks JSON serialization. Before passing any Ollama-generated content into `report_markdown`, strip control characters using Bash:
+
+```bash
+echo "$REPORT_MARKDOWN" | tr -d '\000-\010\013\014\016-\037' 
+```
+
+Or inline in Python:
+```python
+import re
+clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', report_markdown)
+```
+
+This preserves `\n` (0x0a), `\r` (0x0d), and `\t` (0x09) while stripping everything else below 0x20.
 
 #### 6b — Persist to CoPilot via MCP tools (always do this)
 
