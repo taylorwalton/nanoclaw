@@ -162,16 +162,23 @@ cat > ~/.config/nanoclaw/mount-allowlist.json <<EOF
 {
   "allowedRoots": [
     {
+      "path": "$(pwd)/mempalace-data",
+      "allowReadWrite": true,
+      "description": "MemPalace palace data — writable so the agent can persist investigation memories"
+    },
+    {
       "path": "$(pwd)",
       "allowReadWrite": false,
       "description": "Talon project root"
     }
   ],
   "blockedPatterns": [],
-  "nonMainReadOnly": true
+  "nonMainReadOnly": false
 }
 EOF
 ```
+
+> **Order matters:** the `mempalace-data` entry must come before the project root entry — the security layer matches the first applicable root.
 
 ### 5. Configure SIEM credentials
 
@@ -271,9 +278,9 @@ MemPalace gives the SOC agent long-term memory — past investigation outcomes, 
 bash mempalace/setup.sh
 ```
 
-This creates the local venv and the `mempalace-data/` directory where the palace is stored. No further configuration is required — the palace initialises on first use.
+This creates the local venv and the `mempalace-data/` directory where the palace is stored. The palace initialises automatically on first agent run — no separate init step is needed.
 
-> **Note:** `mempalace-data/` is gitignored and persists across container restarts. Back it up alongside your other `.env` files.
+> **Note:** `mempalace-data/` is gitignored and persists across container restarts. The writable mount entry added in Step 4 is what allows the agent to write to it. Back up `mempalace-data/` alongside your other `.env` files.
 
 ### 10. Build the container
 

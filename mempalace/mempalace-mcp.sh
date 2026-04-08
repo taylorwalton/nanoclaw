@@ -61,18 +61,27 @@ fi
 # Auto-initialize the palace on first run.
 # Creates the ChromaDB collection and SQLite knowledge graph tables so the
 # MCP server can immediately read and write without a separate init step.
+#
+# The MCP server does _collection = _get_collection() at import time (no
+# create=True), so if the ChromaDB collection doesn't exist yet every tool
+# call returns a "No palace found" error.  We must create it first.
 SENTINEL="$PALACE_PATH/.initialized"
 if [[ ! -f "$SENTINEL" ]]; then
     echo "[mempalace-mcp] Initializing palace at $PALACE_PATH..." >&2
     "$PYTHON" - <<'PYEOF'
 import os, sys
-palace_path = os.environ.get("MEMPALACE_PALACE_PATH", "")
 try:
-    # Import and instantiate Palace — this creates the ChromaDB collection
-    # and SQLite tables if they don't already exist.
-    from mempalace.palace import Palace
-    Palace()
-    print(f"[mempalace-mcp] Palace initialized successfully", file=sys.stderr)
+    import chromadb
+    from mempalace.palace_graph import MempalaceConfig
+    from mempalace.knowledge_graph import KnowledgeGraph
+
+    config = MempalaceConfig()
+    # Create ChromaDB collection (idempotent)
+    client = chromadb.PersistentClient(path=config.palace_path)
+    client.get_or_create_collection(config.collection_name)
+    # Create SQLite knowledge graph tables (idempotent)
+    KnowledgeGraph()
+    print(f"[mempalace-mcp] Palace initialized at {config.palace_path}", file=sys.stderr)
 except Exception as e:
     # Non-fatal: the MCP server may still start and handle init errors itself
     print(f"[mempalace-mcp] Warning: init returned: {e}", file=sys.stderr)
