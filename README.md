@@ -149,6 +149,9 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 # Optional: webhook endpoint for the 15-minute SOC alert digest
 # WEBHOOK_URL=https://your-endpoint.example.com/talon-digest
 # WEBHOOK_SECRET=optional-bearer-token
+
+# Optional: restrict the credential proxy to loopback only (default: 0.0.0.0)
+# CREDENTIAL_PROXY_HOST=127.0.0.1
 EOF
 ```
 
