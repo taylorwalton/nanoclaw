@@ -82,12 +82,18 @@ export class HttpChannel implements Channel {
       Use the mapping before writing any OpenSearch query.
 
    d. DETECT ALERT TYPE from the raw event:
-      - Check rule.groups array for an entry matching sysmon_event_<N>
-      - If not found, map data.win.system.eventID:
-          1→sysmon_event_1, 3→sysmon_event_3, 7→sysmon_event_7,
-          11→sysmon_event_11, 22→sysmon_event_22
+      - List available templates: ls /workspace/group/prompts/
+      - If Ollama is available, pass the template filenames + alert summary
+        (rule_description, rule_groups, data_win_system_eventID, agent_name)
+        and ask it to pick the best matching filename or return NULL
+      - Fallback if Ollama unavailable: match rule_groups values or
+        data_win_system_eventID against available filenames
 
-   e. LOAD TEMPLATE — Read /workspace/group/prompts/<alert_type>.txt.
+      NOTE: Graylog flattens all fields with underscores — use
+      rule_groups, rule_description, data_win_system_eventID, agent_name.
+      Never use dot notation for raw document fields.
+
+   e. LOAD TEMPLATE — Read /workspace/group/prompts/<filename>.
       If found, follow its steps substituting:
         {{ alert }} → raw OpenSearch event JSON
         {{ event_id }} → numeric event ID
@@ -96,13 +102,13 @@ export class HttpChannel implements Channel {
       If no template, use the default steps below.
 
    f. DEFAULT INVESTIGATION (when no template matches):
-      - Extract IOCs: IPs (data.win.eventdata.destinationIp, data.srcip, data.dstip),
-        domains (data.win.eventdata.queryName, data.win.eventdata.destinationHostname),
-        hashes (data.win.eventdata.hashes), processes (data.win.eventdata.image,
-        data.win.eventdata.parentImage), commands (data.win.eventdata.commandLine)
+      - Extract IOCs: IPs (data_win_eventdata_destinationIp, data_srcip, data_dstip),
+        domains (data_win_eventdata_queryName, data_win_eventdata_destinationHostname),
+        hashes (data_win_eventdata_hashes), processes (data_win_eventdata_image,
+        data_win_eventdata_parentImage), commands (data_win_eventdata_commandLine)
       - For each external IP/domain: WebSearch "<value>" site:virustotal.com
       - For each SHA256 hash: WebFetch https://www.virustotal.com/gui/file/<hash>
-      - Check rule.level, rule.description, rule.mitre.tactic
+      - Check rule_level, rule_description, rule_mitre_tactic
 
    g. WRITE BACK TO COPILOT — call in order:
       1. UpdateAiAnalystJobTool(job_id=<id>, status="completed",

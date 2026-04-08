@@ -177,7 +177,7 @@ Run these in parallel:
 - `text` fields → use `match` or `match_phrase` (analyzed, case-insensitive)
 - Numeric/date fields → use `range`
 
-Some indices use dot notation (`rule.groups`), others use underscores (`rule_groups`). The mapping is the authoritative source — never assume field names.
+**Graylog field naming:** this environment uses Graylog in front of OpenSearch. Graylog flattens all nested fields with underscores — always use `rule_groups`, `rule_level`, `rule_description`, `rule_mitre_id`, `data_win_eventdata_image`, etc. Never use dot notation for raw document fields.
 
 **Once the raw event is fetched, immediately pass it to Ollama for local analysis** (see Privacy-Aware Local Analysis above). Use the Ollama output — not the raw event JSON — as the basis for Steps 2.5 through 6. The raw event should not be re-referenced directly when reasoning or writing the report.
 
@@ -200,19 +200,21 @@ Pass the template filenames and a summary of the raw alert to Ollama:
 ```
 mcp__ollama__ollama_generate(
   model="<best available>",
-  prompt="Available investigation templates:\n<list of .txt filenames>\n\nAlert summary:\nRule: <rule.description>\nGroups: <rule.groups>\nEvent ID: <data.win.system.eventID>\nSource: <agent.name>\n\nWhich template filename best matches this alert? Reply with ONLY the filename (e.g. sysmon_event_1.txt) or NULL if none are a good match.",
+  prompt="Available investigation templates:\n<list of .txt filenames>\n\nAlert summary:\nRule: <rule_description>\nGroups: <rule_groups>\nEvent ID: <data_win_system_eventID>\nSource: <agent_name>\n\nWhich template filename best matches this alert? Reply with ONLY the filename (e.g. sysmon_event_1.txt) or NULL if none are a good match.",
   system="You are a SOC triage assistant. Select the most relevant investigation template for this alert based on the alert type and rule metadata. Be conservative — return NULL if no template is a strong match."
 )
 ```
+
+> **Field naming:** Graylog flattens all nested fields using underscores — `rule_groups`, `rule_description`, `data_win_system_eventID`, `agent_name`. Never use dot notation when reading raw OpenSearch documents in this environment.
 
 Use the filename Ollama returns. If Ollama is unavailable or returns NULL, fall back to Step 3 (filename pattern match).
 
 **Step 3 — Fallback: filename pattern match (if Ollama unavailable or returned NULL)**
 
 Try to match a template by inspecting the alert fields directly:
-- Check `rule.groups` for any value that matches an available filename (strip `.txt`)
-- Check `data.win.system.eventID` — try `sysmon_event_<id>.txt`
-- Check `rule.description` for keywords matching available filenames
+- Check `rule_groups` for any value that matches an available filename (strip `.txt`)
+- Check `data_win_system_eventID` — try `sysmon_event_<id>.txt`
+- Check `rule_description` for keywords matching available filenames
 
 If no match is found, continue with the default Steps 3–6 below.
 
@@ -239,13 +241,13 @@ From the OpenSearch document, identify all indicators of compromise present. Com
 
 | IOC Type | Where to look in the raw event |
 |----------|-------------------------------|
-| IP address | `data.srcip`, `data.dstip`, `data.win.eventdata.destinationIp`, `data.win.eventdata.ipAddress` |
-| Domain / hostname | `data.win.eventdata.queryName`, `data.win.eventdata.destinationHostname` |
-| File hash | `data.win.eventdata.hashes` (MD5, SHA1, SHA256) |
-| Process / executable | `data.win.eventdata.image`, `data.win.eventdata.parentImage` |
-| Command line | `data.win.eventdata.commandLine` |
-| URL | `data.url`, `data.win.eventdata.details` |
-| User account | `data.win.eventdata.user`, `data.win.eventdata.targetUserName` |
+| IP address | `data_srcip`, `data_dstip`, `data_win_eventdata_destinationIp`, `data_win_eventdata_ipAddress` |
+| Domain / hostname | `data_win_eventdata_queryName`, `data_win_eventdata_destinationHostname` |
+| File hash | `data_win_eventdata_hashes` (MD5, SHA1, SHA256) |
+| Process / executable | `data_win_eventdata_image`, `data_win_eventdata_parentImage` |
+| Command line | `data_win_eventdata_commandLine` |
+| URL | `data_url`, `data_win_eventdata_details` |
+| User account | `data_win_eventdata_user`, `data_win_eventdata_targetUserName` |
 
 Extract every IOC you can find. More context = better analysis.
 
@@ -269,7 +271,7 @@ For each IOC, use `WebSearch` and `WebFetch` to gather intelligence. Run these i
 - MalwareBazaar: `WebSearch` `"<hash>" site:bazaar.abuse.ch`
 - Any-Run / Hybrid Analysis: `WebSearch` `"<hash>" malware analysis`
 
-**MITRE ATT&CK techniques (from `rule.mitre.id`):**
+**MITRE ATT&CK techniques (from `rule_mitre_id`):**
 - Look up the technique: `WebFetch` `https://attack.mitre.org/techniques/<technique_id>/`
 - Note the tactic, common actor groups, and recommended mitigations
 
@@ -479,7 +481,7 @@ prompt: |
      b. Extract IOCs from the event (IPs, domains, hashes, process names).
      c. For any external IP or domain found, run a quick VirusTotal check
         via WebSearch: "<value>" site:virustotal.com
-     d. Note the rule.level, rule.description, and rule.mitre.tactic if present.
+     d. Note the rule_level, rule_description, and rule_mitre_tactic if present.
 
   4. Send a single digest message (via send_message) formatted as:
 
