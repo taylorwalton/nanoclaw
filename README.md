@@ -157,20 +157,23 @@ EOF
 
 ### 4. Create the mount allowlist
 
-Controls which host directories can be mounted into agent containers. Lives outside the project root so agents cannot modify it:
+Controls which host directories can be mounted into agent containers. Lives outside the project root so agents cannot modify it.
+
+**Run this from your Talon installation directory** (e.g. `/opt/talon`) so `$(pwd)` resolves correctly:
 
 ```bash
 mkdir -p ~/.config/nanoclaw
+TALON_DIR=$(pwd)
 cat > ~/.config/nanoclaw/mount-allowlist.json <<EOF
 {
   "allowedRoots": [
     {
-      "path": "$(pwd)/mempalace-data",
+      "path": "${TALON_DIR}/mempalace-data",
       "allowReadWrite": true,
       "description": "MemPalace palace data — writable so the agent can persist investigation memories"
     },
     {
-      "path": "$(pwd)",
+      "path": "${TALON_DIR}",
       "allowReadWrite": false,
       "description": "Talon project root"
     }
@@ -181,7 +184,7 @@ cat > ~/.config/nanoclaw/mount-allowlist.json <<EOF
 EOF
 ```
 
-> **Order matters:** the `mempalace-data` entry must come before the project root entry — the security layer matches the first applicable root.
+> **Order matters:** the `mempalace-data` entry must come before the project root entry — the security layer matches the first applicable root. If all MCP tools are unavailable after starting Talon, this file is the first thing to check.
 
 ### 5. Configure SIEM credentials
 
