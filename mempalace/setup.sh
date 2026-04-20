@@ -56,6 +56,28 @@ PALACE_DATA_DIR="$SCRIPT_DIR/../mempalace-data/palace"
 mkdir -p "$PALACE_DATA_DIR"
 echo "Palace data directory: $PALACE_DATA_DIR  ✓"
 
+# Fix ownership so the container (uid 1000 / node) can write to this directory.
+# On Linux hosts the directory is often created as root, which causes ChromaDB
+# to fail on first write inside the container.
+MEMPALACE_ROOT="$(realpath "$SCRIPT_DIR/../mempalace-data")"
+if [[ "$(uname -s)" == "Linux" ]]; then
+    CURRENT_OWNER="$(stat -c '%u' "$MEMPALACE_ROOT" 2>/dev/null || echo "unknown")"
+    if [[ "$CURRENT_OWNER" != "1000" ]]; then
+        if chown -R 1000:1000 "$MEMPALACE_ROOT" 2>/dev/null; then
+            echo "Fixed mempalace-data ownership → uid 1000  ✓"
+        elif command -v sudo &>/dev/null && sudo chown -R 1000:1000 "$MEMPALACE_ROOT" 2>/dev/null; then
+            echo "Fixed mempalace-data ownership (via sudo) → uid 1000  ✓"
+        else
+            echo ""
+            echo "  WARNING: Could not set ownership of $MEMPALACE_ROOT to uid 1000."
+            echo "  The container agent (user 'node', uid 1000) may not be able to write"
+            echo "  to mempalace-data/. Fix manually:"
+            echo "    sudo chown -R 1000:1000 $MEMPALACE_ROOT"
+            echo ""
+        fi
+    fi
+fi
+
 # ── .env ─────────────────────────────────────────────────────────────────────
 ENV_FILE="$SCRIPT_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
