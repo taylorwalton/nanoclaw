@@ -47,9 +47,21 @@ fi
 echo "Using $PYTHON_BIN ($PYTHON_VERSION)  ✓"
 
 # ── Virtual environment ───────────────────────────────────────────────────────
-if [[ ! -d "$VENV_DIR" ]]; then
-    echo "Creating virtual environment..."
+# On Debian/Ubuntu, python3-venv strips ensurepip so pip may be absent even
+# if the venv directory exists. Recreate if pip is missing.
+if [[ ! -d "$VENV_DIR" ]] || [[ ! -f "$VENV_DIR/bin/pip" ]]; then
+    if [[ -d "$VENV_DIR" ]]; then
+        echo "Virtual environment missing pip — recreating..."
+        rm -rf "$VENV_DIR"
+    else
+        echo "Creating virtual environment..."
+    fi
     "$PYTHON_BIN" -m venv "$VENV_DIR"
+    # Bootstrap pip on distros that strip ensurepip (Debian/Ubuntu)
+    if [[ ! -f "$VENV_DIR/bin/pip" ]]; then
+        "$VENV_DIR/bin/python" -m ensurepip --upgrade 2>/dev/null || \
+            curl -sS https://bootstrap.pypa.io/get-pip.py | "$VENV_DIR/bin/python"
+    fi
 else
     echo "Virtual environment exists  ✓"
 fi
