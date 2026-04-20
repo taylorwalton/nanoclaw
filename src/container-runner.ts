@@ -634,6 +634,20 @@ export async function runContainerAgent(
       logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
 
       if (code !== 0) {
+        // Exit 137 = SIGKILL. Claude Code kills itself after a rate_limit_event.
+        // If streaming output already arrived, the agent completed — treat as success
+        // to prevent retry loops that pile up more requests against the same token.
+        if (code === 137 && hadStreamingOutput) {
+          logger.info(
+            { group: group.name, containerName, duration, code },
+            'Container killed after rate limit (output already received — treating as success)',
+          );
+          outputChain.then(() => {
+            resolve({ status: 'success', result: null, newSessionId });
+          });
+          return;
+        }
+
         logger.error(
           {
             group: group.name,
