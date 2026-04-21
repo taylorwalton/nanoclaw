@@ -384,6 +384,41 @@ Call these tools in order:
    )
    ```
 
+#### 6b.5 — Write the investigation eval JSON
+
+After the CoPilot write-back succeeds, write a structured eval record so the CoPilot Feedback Dashboard can compute selection accuracy, tool usage, and palace recall stats without parsing transcripts. One file per investigation:
+
+```bash
+mkdir -p /workspace/group/evals
+cat > /workspace/group/evals/<alert_id>-<job_id>.json <<'EOF'
+{
+  "alert_id": <alert_id>,
+  "job_id": "<job_id>",
+  "customer_code": "<customer_code>",
+  "alert_name": "<alert_name>",
+  "template_used": "<filename or null>",
+  "selection_method": "ollama" | "fallback" | "default" | "override",
+  "template_override": "<filename>" | null,
+  "tools_called": ["mcp__mysql__query", "mcp__opensearch_anon__get_document", ...],
+  "artifacts_collected": ["Windows.System.Pslist", ...],
+  "ioc_count": <number>,
+  "severity": "<Critical|High|Medium|Low|Informational>",
+  "duration_sec": <number>,
+  "ollama_model": "<model id or null>",
+  "palace_lessons_recalled": <number of Step 0.5 MemPalace hits>
+}
+EOF
+```
+
+Rules:
+- `selection_method="override"` means the caller passed `template_override` on `POST /investigate` — skip Step 2.5 and use that template directly.
+- `tools_called` should list the MCP tool names invoked during the investigation (for Velociraptor artifact collections, suffix with `:<artifact_name>`). A best-effort log is fine — this is telemetry, not a contract.
+- `artifacts_collected` lists Velociraptor artifact names if any live-forensics step ran; empty array otherwise.
+- `palace_lessons_recalled` counts drawers returned by Step 0.5 `mempalace_search` that you actually used in your analysis (not total results).
+- The file is read back by `GET /evals/:alertId` on NanoClaw's HTTP channel.
+
+Write the file even if write-back partially fails — a failed investigation is itself useful signal for the dashboard.
+
 #### 6c — Send the structured report to the analyst
 
 Deliver the report via `send_message` with these sections:

@@ -1,8 +1,15 @@
+import fs from 'fs';
 import http from 'http';
 import path from 'path';
 
 import { createTask, getTaskById, getTasksForGroup } from '../db.js';
 import { logger } from '../logger.js';
+import {
+  addLesson,
+  searchPalace,
+  VALID_LESSON_TYPES,
+  LessonType,
+} from '../palace-client.js';
 import { computeNextRun } from '../task-scheduler.js';
 import { readEnvFile } from '../env.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -272,6 +279,7 @@ export class HttpChannel implements Channel {
             alert_id?: number;
             customer_code?: string;
             triggered_by?: string;
+            template_override?: string;
           } = {};
           try {
             parsed = JSON.parse(body);
@@ -293,20 +301,63 @@ export class HttpChannel implements Channel {
           const triggered_by = parsed.triggered_by || 'webhook';
           const jobId = `copilot-inv-${alert_id}-${Date.now()}`;
 
+          // Validate template_override (if provided) against the on-disk
+          // prompts directory to prevent path traversal and catch typos
+          // before queuing the investigation.
+          let templateOverride: string | null = null;
+          if (parsed.template_override) {
+            const raw = parsed.template_override;
+            if (!/^[a-zA-Z0-9._-]+\.txt$/.test(raw)) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error:
+                    'template_override must be a plain .txt filename (no path separators)',
+                }),
+              );
+              return;
+            }
+            const promptsDir = path.join(
+              process.cwd(),
+              'groups',
+              COPILOT_GROUP_FOLDER,
+              'prompts',
+            );
+            if (!fs.existsSync(path.join(promptsDir, raw))) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error: `template_override not found: ${raw}`,
+                }),
+              );
+              return;
+            }
+            templateOverride = raw;
+          }
+
+          const overrideLine = templateOverride
+            ? `\n- template_override: ${templateOverride}`
+            : '';
+
+          const stepOverrideInstruction = templateOverride
+            ? `3a. TEMPLATE OVERRIDE — the caller selected template "${templateOverride}". Skip Step 2.5 template detection entirely. Read /workspace/group/prompts/${templateOverride} directly and follow it. Record selection_method="override" when writing the eval JSON.\n`
+            : '';
+
           const prompt = `You are running a targeted SOC investigation triggered by CoPilot. Follow the full investigation workflow from CLAUDE.md.
 
 Alert to investigate:
 - alert_id: ${alert_id}
 - customer_code: ${customer_code}
 - job_id: ${jobId}
-- triggered_by: ${triggered_by}
+- triggered_by: ${triggered_by}${overrideLine}
 
 Steps:
 1. Skip Step 0 deduplication — this job has already been registered by the caller with id="${jobId}". Call UpdateAiAnalystJobTool(job_id="${jobId}", status="running") immediately.
 2. Pull the alert from MySQL using alert_id=${alert_id} and customer_code="${customer_code}".
 3. Follow Steps 2–6 from CLAUDE.md exactly (fetch raw event + index mapping, detect alert type, load template, extract IOCs, threat intel, SIEM correlation).
-4. Write back to CoPilot using job_id="${jobId}" and the report/IOC tools.
-5. Send the full investigation report via send_message.`;
+${stepOverrideInstruction}4. Write back to CoPilot using job_id="${jobId}" and the report/IOC tools.
+5. Write the eval JSON to /workspace/group/evals/${alert_id}-${jobId}.json as instructed in CLAUDE.md Step 6.
+6. Send the full investigation report via send_message.`;
 
           this.opts.onMessage(COPILOT_JID, {
             id: `investigate-${jobId}`,
@@ -319,13 +370,185 @@ Steps:
           });
 
           logger.info(
-            { alert_id, customer_code, jobId, triggered_by },
+            {
+              alert_id,
+              customer_code,
+              jobId,
+              triggered_by,
+              template_override: templateOverride,
+            },
             'HTTP channel: investigation queued',
           );
 
           res.writeHead(202, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ job_id: jobId, status: 'queued' }));
+          res.end(
+            JSON.stringify({
+              job_id: jobId,
+              status: 'queued',
+              template_override: templateOverride,
+            }),
+          );
         });
+        return;
+      }
+
+      // GET /evals/:alertId — returns the eval JSON written by the agent
+      // at the end of an investigation. If multiple evals exist for the
+      // same alert_id (replays), returns them in descending job_id order.
+      if (req.method === 'GET' && req.url?.startsWith('/evals/')) {
+        const alertIdRaw = req.url.slice('/evals/'.length);
+        if (!/^\d+$/.test(alertIdRaw)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'invalid alert_id' }));
+          return;
+        }
+        const evalsDir = path.join(
+          process.cwd(),
+          'groups',
+          COPILOT_GROUP_FOLDER,
+          'evals',
+        );
+        if (!fs.existsSync(evalsDir)) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ alert_id: Number(alertIdRaw), evals: [] }));
+          return;
+        }
+        const prefix = `${alertIdRaw}-`;
+        const matches = fs
+          .readdirSync(evalsDir)
+          .filter((f) => f.startsWith(prefix) && f.endsWith('.json'))
+          .sort()
+          .reverse();
+        const evals = matches
+          .map((f) => {
+            try {
+              return JSON.parse(
+                fs.readFileSync(path.join(evalsDir, f), 'utf8'),
+              );
+            } catch (e) {
+              logger.warn({ file: f, err: e }, 'failed to parse eval file');
+              return null;
+            }
+          })
+          .filter((x) => x !== null);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ alert_id: Number(alertIdRaw), evals }));
+        return;
+      }
+
+      // POST /palace/lesson — CoPilot drainer calls this to ingest
+      // teach-the-palace lessons from the review UI. Wraps mempalace_add_drawer
+      // so CoPilot never needs an MCP client.
+      if (req.method === 'POST' && req.url === '/palace/lesson') {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', async () => {
+          let parsed: {
+            customer_code?: string;
+            lesson_type?: string;
+            lesson_text?: string;
+            durability?: string;
+          } = {};
+          try {
+            parsed = JSON.parse(body);
+          } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            return;
+          }
+
+          const { customer_code, lesson_type, lesson_text } = parsed;
+          if (!customer_code || !lesson_type || !lesson_text) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                error:
+                  'customer_code, lesson_type, and lesson_text are required',
+              }),
+            );
+            return;
+          }
+          if (!VALID_LESSON_TYPES.has(lesson_type as LessonType)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                error: `lesson_type must be one of: ${Array.from(
+                  VALID_LESSON_TYPES,
+                ).join(', ')}`,
+              }),
+            );
+            return;
+          }
+          const durability =
+            parsed.durability === 'one_off' ? 'one_off' : 'durable';
+
+          try {
+            const result = await addLesson({
+              customer_code,
+              lesson_type: lesson_type as LessonType,
+              lesson_text,
+              durability,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            logger.error({ err: msg }, 'POST /palace/lesson failed');
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: msg }));
+          }
+        });
+        return;
+      }
+
+      // GET /palace/search — powers the similar-lessons preview in the
+      // teach-the-palace UI. Wraps mempalace_search.
+      if (req.method === 'GET' && req.url?.startsWith('/palace/search')) {
+        const url = new URL(req.url, `http://localhost:${COPILOT_HTTP_PORT}`);
+        const customer_code = url.searchParams.get('customer_code');
+        const query = url.searchParams.get('query');
+        const room = url.searchParams.get('room') || undefined;
+        const limitRaw = url.searchParams.get('limit');
+
+        if (!customer_code || !query) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({ error: 'customer_code and query are required' }),
+          );
+          return;
+        }
+        if (room && !VALID_LESSON_TYPES.has(room as LessonType)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: `room must be one of: ${Array.from(
+                VALID_LESSON_TYPES,
+              ).join(', ')}`,
+            }),
+          );
+          return;
+        }
+        const limit = limitRaw ? Math.max(1, Math.min(25, Number(limitRaw))) : 5;
+
+        (async () => {
+          try {
+            const result = await searchPalace({
+              customer_code,
+              room: room as LessonType | undefined,
+              query,
+              limit,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            logger.error({ err: msg }, 'GET /palace/search failed');
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: msg }));
+          }
+        })();
         return;
       }
 
@@ -417,7 +640,14 @@ Steps:
           `  POST /message     { "message": "...", "sender": "..." }`,
         );
         console.log(
-          `  POST /investigate { "alert_id": 123, "customer_code": "acme" }`,
+          `  POST /investigate    { "alert_id": 123, "customer_code": "acme", "template_override": "sysmon_event_1.txt" }`,
+        );
+        console.log(`  GET  /evals/:alertId`);
+        console.log(
+          `  POST /palace/lesson  { "customer_code": "acme", "lesson_type": "environment", "lesson_text": "...", "durability": "durable" }`,
+        );
+        console.log(
+          `  GET  /palace/search  ?customer_code=acme&query=...&room=environment&limit=5`,
         );
         console.log(`  GET  /status`);
         console.log(`  GET  /health\n`);
