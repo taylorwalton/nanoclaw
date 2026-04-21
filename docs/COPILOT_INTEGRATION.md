@@ -519,8 +519,8 @@ Reviews can generate lessons fast. Two guards keep the palace useful:
 | 7 | Scheduled task deduplication + full write-back with real tool names | NanoClaw | ✅ Done |
 | 8 | `POST /investigate` endpoint in NanoClaw | NanoClaw | ✅ Done |
 | 9 | `GET /status` endpoint in NanoClaw | NanoClaw | ✅ Done |
-| 10 | Additional prompt templates (events 3, 7, 11, 22) | NanoClaw | Planned |
-| 11 | CoPilot UI: alert analysis tab + status badges | CoPilot | Planned |
+| 10 | Additional prompt templates (events 3, 7, 11, 22) | NanoClaw | ✅ Done |
+| 11 | CoPilot UI: alert analysis tab + status badges | CoPilot | ✅ Done |
 | 12 | Eval JSON output per investigation (`groups/copilot/evals/`) | NanoClaw | Planned |
 | 13 | `template_override` param on `POST /investigate` | NanoClaw | Planned |
 | 14 | NanoClaw palace HTTP endpoints: `POST /palace/lesson` + `GET /palace/search` wrapping MemPalace MCP tools | NanoClaw | Planned |
