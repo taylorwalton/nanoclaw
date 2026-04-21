@@ -25,6 +25,7 @@ groups/copilot/*
 !groups/copilot/prompts/
 groups/copilot/prompts/*
 !groups/copilot/prompts/*.txt
+!groups/copilot/prompts/README.md
 
 # Secrets
 *.keys.json
