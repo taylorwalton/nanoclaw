@@ -29,11 +29,48 @@ You will also see MiTRE ATT&CK techniques associated with the alert, which will 
 
 6. **Hash Analysis**: Extract the file hashes from `data.win.eventdata.hashes` (MD5, SHA1, SHA256). Look up any SHA256 hash on VirusTotal: WebFetch https://www.virustotal.com/gui/file/<hash>
 
-7. **Explain in Layman's Terms**: Break down the technical aspects for a novice audience, using simple language while preserving accuracy.
+7. **Live Forensics — Velociraptor artifact recommendations**: If the alert is **suspicious or worse** after Steps 1–6 (VT verdict ≥ suspicious, unusual parent/child chain, decoded base64 reveals malicious intent, etc.), collect live evidence from the affected host. Skip this step for clean verdicts.
 
-8. **Provide Technical Insights**: Offer deeper technical insights and analyses that would be of interest to an expert.
+   Resolve the client first:
+   ```
+   mcp__velociraptor__GetAgentInfo(hostname=<asset_name>)
+   → returns client_id
+   ```
 
-9. **Outline Recommended Actions**: Suggest clear actions for both immediate response and future prevention.
+   Then collect artifacts in priority order. Start with the cheapest, escalate only if results warrant it:
+
+   | Priority | Artifact | Why it's useful for Sysmon Event 1 |
+   |---|---|---|
+   | P1 | `Windows.System.Pslist` | Is the suspicious process still running? Parent/child tree at collection time. |
+   | P1 | `Windows.Forensics.Prefetch` | Confirms prior executions of the binary — first-seen vs. repeat offender. |
+   | P2 | `Windows.Sysinternals.Autoruns` | Has this process established persistence (Run keys, scheduled tasks, services)? |
+   | P2 | `Windows.Forensics.UserAssist` | Was the process user-initiated (double-click) vs. spawned programmatically? |
+   | P3 | `Windows.Detection.Yara.Process` | YARA-scan the process memory for known malware families. Requires `YaraRule` param. |
+   | P3 | `Windows.Memory.ProcessDump` | Full memory dump for offline analysis. Expensive — reserve for confirmed malicious. |
+   | P3 | `Windows.NTFS.MFT` | File timeline — when the binary was dropped, renamed, or deleted. |
+
+   Collect with:
+   ```
+   mcp__velociraptor__CollectArtifactTool(
+     client_id=<from GetAgentInfo>,
+     artifact="Windows.System.Pslist"
+   )
+   → returns flow_id
+
+   mcp__velociraptor__GetCollectionResultsTool(
+     client_id=<id>, flow_id=<id>
+   )
+   ```
+
+   For artifacts that take parameters (e.g. `Windows.Detection.Yara.Process`), call `FindArtifactDetailsTool` first to see the required spec.
+
+   Fold the collection results into your report under a dedicated **Live Forensics** section alongside the IOC analysis.
+
+8. **Explain in Layman's Terms**: Break down the technical aspects for a novice audience, using simple language while preserving accuracy.
+
+9. **Provide Technical Insights**: Offer deeper technical insights and analyses that would be of interest to an expert.
+
+10. **Outline Recommended Actions**: Suggest clear actions for both immediate response and future prevention.
 
 # INPUT
 ```json
