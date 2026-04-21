@@ -51,7 +51,9 @@ function runPalaceCall(payload: object): Promise<unknown> {
 
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`palace-call.sh timed out after ${PALACE_TIMEOUT_MS}ms`));
+      reject(
+        new Error(`palace-call.sh timed out after ${PALACE_TIMEOUT_MS}ms`),
+      );
     }, PALACE_TIMEOUT_MS);
 
     child.stdout.on('data', (chunk) => {

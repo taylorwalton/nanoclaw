@@ -530,7 +530,9 @@ ${stepOverrideInstruction}4. Write back to CoPilot using job_id="${jobId}" and t
           );
           return;
         }
-        const limit = limitRaw ? Math.max(1, Math.min(25, Number(limitRaw))) : 5;
+        const limit = limitRaw
+          ? Math.max(1, Math.min(25, Number(limitRaw)))
+          : 5;
 
         (async () => {
           try {
