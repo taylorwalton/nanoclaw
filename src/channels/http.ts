@@ -436,6 +436,63 @@ ${stepOverrideInstruction}4. Write back to CoPilot using job_id="${jobId}" and t
         return;
       }
 
+      // GET /templates — lists .txt prompt templates available in the CoPilot
+      // group prompts/ directory. Powers the "Re-run with different template"
+      // modal in the review UI. Read-only; never exposes template bodies
+      // here — the agent is the only consumer of the full content.
+      if (req.method === 'GET' && req.url === '/templates') {
+        const promptsDir = path.join(
+          process.cwd(),
+          'groups',
+          COPILOT_GROUP_FOLDER,
+          'prompts',
+        );
+        if (!fs.existsSync(promptsDir)) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ templates: [] }));
+          return;
+        }
+        try {
+          const files = fs
+            .readdirSync(promptsDir)
+            .filter((f) => f.endsWith('.txt'))
+            .sort();
+          const templates = files.map((filename) => {
+            const full = path.join(promptsDir, filename);
+            const stat = fs.statSync(full);
+            // Use the first non-empty line as a human-readable preview —
+            // most templates start with a "# Title" or short role statement.
+            let firstLine: string | null = null;
+            try {
+              const raw = fs.readFileSync(full, 'utf8');
+              for (const line of raw.split('\n')) {
+                const trimmed = line.trim();
+                if (trimmed.length > 0) {
+                  firstLine = trimmed.slice(0, 200);
+                  break;
+                }
+              }
+            } catch {
+              // Ignore read errors; preview stays null
+            }
+            return {
+              filename,
+              size_bytes: stat.size,
+              modified_at: stat.mtime.toISOString(),
+              first_line: firstLine,
+            };
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ templates }));
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          logger.error({ err: msg }, 'GET /templates failed');
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: msg }));
+        }
+        return;
+      }
+
       // POST /palace/lesson — CoPilot drainer calls this to ingest
       // teach-the-palace lessons from the review UI. Wraps mempalace_add_drawer
       // so CoPilot never needs an MCP client.
@@ -645,6 +702,7 @@ ${stepOverrideInstruction}4. Write back to CoPilot using job_id="${jobId}" and t
           `  POST /investigate    { "alert_id": 123, "customer_code": "acme", "template_override": "sysmon_event_1.txt" }`,
         );
         console.log(`  GET  /evals/:alertId`);
+        console.log(`  GET  /templates`);
         console.log(
           `  POST /palace/lesson  { "customer_code": "acme", "lesson_type": "environment", "lesson_text": "...", "durability": "durable" }`,
         );
