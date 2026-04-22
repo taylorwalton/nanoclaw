@@ -527,7 +527,7 @@ Reviews can generate lessons fast. Two guards keep the palace useful:
 | 15 | Review MySQL tables (`ai_analyst_review`, `ai_analyst_ioc_review`, `ai_analyst_palace_lesson`) | CoPilot | ✅ Done |
 | 16 | CoPilot REST endpoints: review submit, replay, palace lesson queue | CoPilot | ✅ Done |
 | 17 | CoPilot async palace drainer (POSTs queued lessons to NanoClaw `/palace/lesson`) | CoPilot | ✅ Done |
-| 18 | CoPilot UI: inline review panel + teach-the-palace | CoPilot | Planned |
-| 19 | CoPilot UI: re-run / A-B template comparison modal | CoPilot | Planned |
-| 20 | CoPilot UI: feedback dashboard (selection accuracy, flagged steps, lesson hit rate) | CoPilot | Planned |
-| 21 | Durability sweeper + quarterly palace consolidation workflow | Both | Planned |
+| 18 | CoPilot UI: inline review panel + teach-the-palace | CoPilot | ✅ Done |
+| 19 | CoPilot UI: re-run / A-B template comparison modal | CoPilot | ✅ Done |
+| 20 | CoPilot UI: feedback dashboard (selection accuracy, flagged steps, lesson hit rate) | CoPilot | ✅ Done |
+| 21 | Durability sweeper + manual palace consolidation workflow | Both | ✅ Done |
