@@ -324,6 +324,12 @@ MemPalace gives the SOC agent long-term memory — past investigation outcomes, 
 bash mempalace/setup.sh
 ```
 
+If the build fails try installing the C++ complier and build tools:
+
+```bash
+apt install -y build-essential g++ python3-dev
+```
+
 This creates the local venv and the `mempalace-data/` directory where the palace is stored. The palace initialises automatically on first agent run — no separate init step is needed.
 
 > **Note:** `mempalace-data/` is gitignored and persists across container restarts. The writable mount entry added in Step 4 is what allows the agent to write to it. Back up `mempalace-data/` alongside your other `.env` files.
