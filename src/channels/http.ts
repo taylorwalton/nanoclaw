@@ -25,7 +25,16 @@ const HTTP_API_KEY = readEnvFile(['HTTP_API_KEY']).HTTP_API_KEY || '';
 interface SseWriter {
   res: http.ServerResponse;
   resolve: () => void;
+  // Periodic SSE comment writer that keeps the TCP connection from being
+  // reaped by intermediate proxies / idle timers while the agent is still
+  // thinking. Cleared when the writer is closed or resolved.
+  keepalive?: NodeJS.Timeout;
 }
+
+// Cadence for SSE keepalive comments. 15s is comfortably under the default
+// idle timeouts on common reverse proxies (nginx 60s, traefik 90s, GCP LB 600s)
+// and Docker bridge network conntrack flows (300s).
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
 export class HttpChannel implements Channel {
   name = 'http';
@@ -704,7 +713,22 @@ ${stepOverrideInstruction}4. Write back to CoPilot using job_id="${jobId}" and t
             const writer: SseWriter = { res, resolve };
             this.pendingQueue.push(writer);
 
+            // Start SSE keepalive immediately. The agent may take 30–90s to
+            // boot the container + produce its first chunk; without periodic
+            // bytes, intermediate proxies happily reap the connection and the
+            // eventual response arrives at a closed socket. SSE comments
+            // (lines starting with ":") are ignored by the client parser.
+            writer.keepalive = setInterval(() => {
+              if (!res.writableEnded) {
+                res.write(': keepalive\n\n');
+              }
+            }, SSE_KEEPALIVE_INTERVAL_MS);
+
             res.on('close', () => {
+              if (writer.keepalive) {
+                clearInterval(writer.keepalive);
+                writer.keepalive = undefined;
+              }
               const idx = this.pendingQueue.indexOf(writer);
               if (idx !== -1) this.pendingQueue.splice(idx, 1);
               if (this.currentWriter === writer) this.currentWriter = null;
@@ -794,6 +818,10 @@ ${stepOverrideInstruction}4. Write back to CoPilot using job_id="${jobId}" and t
         logger.warn(
           'HTTP channel: setTyping(false) called with active writer — closing via safety net',
         );
+        if (this.currentWriter.keepalive) {
+          clearInterval(this.currentWriter.keepalive);
+          this.currentWriter.keepalive = undefined;
+        }
         const event = JSON.stringify({ type: 'done' });
         this.currentWriter.res.write(`data: ${event}\n\n`);
         this.currentWriter.res.end();
@@ -808,6 +836,10 @@ ${stepOverrideInstruction}4. Write back to CoPilot using job_id="${jobId}" and t
     // rather than waiting for the container's idle timeout.
     this.activeInvestigations = Math.max(0, this.activeInvestigations - 1);
     if (this.currentWriter) {
+      if (this.currentWriter.keepalive) {
+        clearInterval(this.currentWriter.keepalive);
+        this.currentWriter.keepalive = undefined;
+      }
       const event = JSON.stringify({ type: 'done' });
       this.currentWriter.res.write(`data: ${event}\n\n`);
       this.currentWriter.res.end();
