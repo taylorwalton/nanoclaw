@@ -127,6 +127,67 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
+// Truncate large strings for log readability while keeping enough signal to
+// debug a tool call. JSON.stringify handles MCP tool inputs/outputs that are
+// nested objects.
+function truncate(value: unknown, max: number): string {
+  let s: string;
+  try {
+    s = typeof value === 'string' ? value : JSON.stringify(value);
+  } catch {
+    s = String(value);
+  }
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max)}…(${s.length} chars)` : s;
+}
+
+interface ContentBlock {
+  type: string;
+  text?: string;
+  thinking?: string;
+  name?: string;
+  input?: unknown;
+  tool_use_id?: string;
+  content?: unknown;
+  is_error?: boolean;
+}
+
+// Pretty-log the assistant/user content blocks emitted by the Claude Agent
+// SDK so the operator can see what tools the agent is actually invoking and
+// what data they're returning. Without this, container logs show only
+// `type=assistant` lines with no visibility into tool calls.
+function logContentBlocks(prefix: string, blocks: ContentBlock[]): void {
+  for (const block of blocks) {
+    switch (block.type) {
+      case 'text': {
+        const text = block.text || '';
+        if (text.trim()) log(`${prefix} text: ${truncate(text, 240)}`);
+        break;
+      }
+      case 'thinking': {
+        const t = block.thinking || '';
+        if (t.trim()) log(`${prefix} thinking: ${truncate(t, 200)}`);
+        break;
+      }
+      case 'tool_use': {
+        log(
+          `${prefix} tool_use: ${block.name} input=${truncate(block.input, 400)}`,
+        );
+        break;
+      }
+      case 'tool_result': {
+        const tag = block.is_error ? 'tool_result(ERROR)' : 'tool_result';
+        log(
+          `${prefix} ${tag}: id=${block.tool_use_id ?? '?'} ${truncate(block.content, 400)}`,
+        );
+        break;
+      }
+      default:
+        log(`${prefix} ${block.type}`);
+    }
+  }
+}
+
 function getSessionSummary(
   sessionId: string,
   transcriptPath: string,
@@ -518,6 +579,19 @@ async function runQuery(
         ? `system/${(message as { subtype?: string }).subtype}`
         : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
+
+    // Surface what the agent is actually doing — tool calls, returns, and
+    // text — so the container log is debuggable without re-running with
+    // verbose SDK tracing. The SDK wraps the Anthropic API message under
+    // `message.message`, with content blocks describing each step of the turn.
+    const inner = (message as { message?: { content?: ContentBlock[] } })
+      .message;
+    if (
+      (message.type === 'assistant' || message.type === 'user') &&
+      Array.isArray(inner?.content)
+    ) {
+      logContentBlocks(`[msg #${messageCount}]`, inner.content);
+    }
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
