@@ -28,6 +28,13 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
+# Pre-install pymysql system-wide so the agent can do multi-query batched
+# lookups via Bash without re-running `pip install` on every container boot.
+# The agent prefers Bash + pymysql for cross-table customer profiles where a
+# single MySQL MCP call would balloon into 5+ round trips. See
+# /workspace/extra/mysql/CLAUDE.md for the tool-selection rule.
+RUN python3 -m pip install --break-system-packages --quiet pymysql
+
 # Install opensearch-mcp-server into a system venv (used by the SIEM MCP wrapper and anon proxy)
 RUN python3 -m venv /opt/opensearch-mcp \
     && /opt/opensearch-mcp/bin/pip install --quiet opensearch-mcp-server pyyaml

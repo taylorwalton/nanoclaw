@@ -2,6 +2,22 @@
 
 You have read access to the **CoPilot** application database — the SOCfortress platform that acts as a single pane of glass into the SIEM stack. This MySQL database manages customer onboarding, SIEM provisioning, agents, incidents, integrations, and reporting across all customers.
 
+## Tool selection
+
+You have two paths to the database — pick the right one for the job:
+
+| Situation | Use | Why |
+|-----------|-----|-----|
+| Single read query (one table, one filter) | **MySQL MCP** (`mcp__mysql__*` tools) | Schema-typed, safer, surfaces tool errors cleanly |
+| Multi-query profile spanning 3+ tables | **Bash + `python3` with `pymysql`** | One connection, one round-trip, one JSON return |
+| Aggregating + reformatting before reply | **Bash + `python3`** | Easier to join/dedupe/format in code than across MCP calls |
+| Schema discovery (`DESCRIBE`, `SHOW COLUMNS`) | **MySQL MCP** | Quick lookup, no setup overhead |
+| Anything that needs a transaction or multi-statement script | **Bash + `python3`** | The MCP tool is single-statement |
+
+`pymysql` is **pre-installed** in the container — never run `pip install` for it. Connect with the same `host` / `port` / `user` / `password` / `database` env vars the MySQL MCP uses.
+
+**Default to the MCP for one-off lookups.** Only batch via Bash when collapsing N MCP round-trips into 1 saves real work.
+
 ## Query Workflow
 
 1. **Discover before querying** — confirm exact column names with a describe query before writing filters. Column names are stable but verify nullable/type when building conditions.
