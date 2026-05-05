@@ -47,15 +47,40 @@ fi
 echo "Using $PYTHON_BIN ($PYTHON_VERSION)  ✓"
 
 # ── Virtual environment ───────────────────────────────────────────────────────
-# On Debian/Ubuntu, python3-venv strips ensurepip so pip may be absent even
-# if the venv directory exists. Recreate if pip is missing.
-if [[ ! -d "$VENV_DIR" ]] || [[ ! -f "$VENV_DIR/bin/pip" ]]; then
-    if [[ -d "$VENV_DIR" ]]; then
-        echo "Virtual environment missing pip — recreating..."
-        rm -rf "$VENV_DIR"
-    else
-        echo "Creating virtual environment..."
-    fi
+# Recreate if:
+#   1. Missing entirely.
+#   2. Has no pip (Debian/Ubuntu strip ensurepip from python3-venv).
+#   3. Has a stale shebang in pip pointing at a path that doesn't exist —
+#      happens when the venv was rsync'd or restored from another host. The
+#      old shebang lingers (e.g. #!/opt/talon/siem/.venv/bin/python from the
+#      build host) and pip silently fails with "no such file" before its own
+#      logic runs.
+_venv_pip_shebang_stale() {
+    [[ -f "$VENV_DIR/bin/pip" ]] || return 1
+    local shebang
+    shebang=$(head -n 1 "$VENV_DIR/bin/pip" 2>/dev/null)
+    # Strip the leading `#!` and any args, take the first token (the interpreter).
+    local interp="${shebang#\#!}"
+    interp="${interp%% *}"
+    [[ -n "$interp" && ! -x "$interp" ]]
+}
+
+needs_recreate=0
+reason=""
+if [[ ! -d "$VENV_DIR" ]]; then
+    needs_recreate=1
+    reason="Creating virtual environment..."
+elif [[ ! -f "$VENV_DIR/bin/pip" ]]; then
+    needs_recreate=1
+    reason="Virtual environment missing pip — recreating..."
+elif _venv_pip_shebang_stale; then
+    needs_recreate=1
+    reason="Virtual environment has stale pip shebang (likely copied from another host) — recreating..."
+fi
+
+if [[ "$needs_recreate" -eq 1 ]]; then
+    [[ -d "$VENV_DIR" ]] && rm -rf "$VENV_DIR"
+    echo "$reason"
     "$PYTHON_BIN" -m venv "$VENV_DIR"
     # Bootstrap pip on distros that strip ensurepip (Debian/Ubuntu)
     if [[ ! -f "$VENV_DIR/bin/pip" ]]; then
