@@ -32,19 +32,49 @@ _is_native_exec() {
     return 0
 }
 
-if _is_native_exec "$LOCAL_PYTHON"; then
-    # Host: use the siem venv — install pyyaml if not already present
-    "$LOCAL_PYTHON" -c "import yaml" 2>/dev/null || \
-        "$SCRIPT_DIR/.venv/bin/pip" install --quiet pyyaml >&2
+# Try the local siem venv first, then fall back to the container's system venv.
+#
+# Two booby-traps we have to avoid here:
+#
+#   1. Stale pip shebang. `.venv/bin/pip` is a python script with a hard-coded
+#      shebang baked in at venv creation time (e.g.
+#      `#!/opt/talon/siem/.venv/bin/python`). When the venv was built on a
+#      different machine and rsync'd / restored to this host, that shebang
+#      points at a path that doesn't exist locally — bare `pip install ...`
+#      then fails with "no such file or directory" before pip's logic even
+#      runs. Workaround: invoke pip via the python interpreter
+#      (`python -m pip`) which bypasses pip's shebang entirely.
+#
+#   2. `set -e` killing the script on local-venv failure. The previous
+#      `cmd1 || cmd2` pattern, where cmd2 was the pip install, triggers
+#      `set -e` exit if cmd2 fails — set -e treats the command after the
+#      final `||` as a normal terminating command. We wrap the local-venv
+#      branch in `if/then/fi` so a failure naturally falls through to the
+#      system-venv fallback instead of aborting the whole script.
+
+_try_python() {
+    local py="$1"
+    [[ -x "$py" ]] || return 1
+    # If pyyaml already importable, we're done.
+    if "$py" -c "import yaml" 2>/dev/null; then
+        return 0
+    fi
+    # Otherwise install via `python -m pip` (NOT bare pip — that has the stale
+    # shebang trap). Suppress noise; surface only fatal failures via exit code.
+    "$py" -m pip install --quiet pyyaml >&2 2>/dev/null
+}
+
+if _is_native_exec "$LOCAL_PYTHON" && _try_python "$LOCAL_PYTHON"; then
     exec "$LOCAL_PYTHON" "$PROXY_SCRIPT"
-elif [[ -x "$SYSTEM_PYTHON" ]]; then
-    # Container: use the system opensearch-mcp venv — install pyyaml if needed
-    "$SYSTEM_PYTHON" -c "import yaml" 2>/dev/null || \
-        /opt/opensearch-mcp/bin/pip install --quiet pyyaml >&2
-    exec "$SYSTEM_PYTHON" "$PROXY_SCRIPT"
-else
-    echo "[anon-opensearch-mcp] ERROR: python3 not found." >&2
-    echo "[anon-opensearch-mcp]   In a container: rebuild the image (container/build.sh)" >&2
-    echo "[anon-opensearch-mcp]   On the host: run siem/setup.sh" >&2
-    exit 1
 fi
+
+if [[ -x "$SYSTEM_PYTHON" ]] && _try_python "$SYSTEM_PYTHON"; then
+    exec "$SYSTEM_PYTHON" "$PROXY_SCRIPT"
+fi
+
+echo "[anon-opensearch-mcp] ERROR: no working python3 environment found." >&2
+echo "[anon-opensearch-mcp]   Tried: $LOCAL_PYTHON" >&2
+echo "[anon-opensearch-mcp]   Tried: $SYSTEM_PYTHON" >&2
+echo "[anon-opensearch-mcp]   In a container: rebuild the image (container/build.sh)" >&2
+echo "[anon-opensearch-mcp]   On the host: rerun siem/setup.sh to recreate the venv" >&2
+exit 1
