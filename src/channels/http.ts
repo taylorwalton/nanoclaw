@@ -375,7 +375,21 @@ Steps:
 1. Skip Step 0 deduplication — this job has already been registered by the caller with id="${jobId}". Call UpdateAiAnalystJobTool(job_id="${jobId}", status="running") immediately.
 2. Pull the alert from MySQL using alert_id=${alert_id} and customer_code="${customer_code}".
 3. Follow Steps 2–6 from CLAUDE.md exactly (fetch raw event + index mapping, detect alert type, load template, extract IOCs, threat intel, SIEM correlation).
-${stepOverrideInstruction}4. Write back to CoPilot using job_id="${jobId}" and the report/IOC tools.
+${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in order. The four body fields on SubmitAiAnalystReportTool (severity_assessment, summary, report_markdown, recommended_actions) carry the entire human-readable investigation output; a call missing any of them persists a blank row that surfaces as an empty report in CoPilot. Pass all of them every time, even on trivial false positives.
+
+   a. mcp__copilot__UpdateAiAnalystJobTool(job_id="${jobId}", status="completed", template_used=<template key or null>)
+
+   b. mcp__copilot__SubmitAiAnalystReportTool — returns report_id:
+        job_id="${jobId}"
+        alert_id=${alert_id}
+        customer_code="${customer_code}"
+        severity_assessment=<Critical|High|Medium|Low|Informational>
+        summary=<1-2 sentence tl;dr>
+        report_markdown=<full structured markdown report>
+        recommended_actions=<action list>
+
+   c. mcp__copilot__SubmitAiAnalystIocsTool(report_id=<from 4b>, alert_id=${alert_id}, customer_code="${customer_code}", iocs=[...])
+
 5. Write the eval JSON to /workspace/group/evals/${alert_id}-${jobId}.json as instructed in CLAUDE.md Step 6.
 6. Send the full investigation report via send_message.`;
 
