@@ -11,6 +11,30 @@ function log(msg: string): void {
   console.error(`[claude-provider] ${msg}`);
 }
 
+// Token usage reported on the SDK `result` message. The Agent SDK surfaces the
+// same cache fields the Anthropic API returns — this is how we confirm prompt
+// caching (managed by the SDK) is actually landing hits.
+interface CacheUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+// Log cache hit rate per turn. Hit rate = cached input / total input tokens.
+// If `read` stays at 0 across turns, a silent invalidator is busting the prefix.
+function logCacheUsage(prefix: string, usage: CacheUsage | undefined, costUsd: number | undefined): void {
+  if (!usage) return;
+  const fresh = usage.input_tokens ?? 0;
+  const write = usage.cache_creation_input_tokens ?? 0;
+  const read = usage.cache_read_input_tokens ?? 0;
+  const out = usage.output_tokens ?? 0;
+  const totalIn = fresh + write + read;
+  const hitRate = totalIn > 0 ? ((read / totalIn) * 100).toFixed(1) : '0.0';
+  const cost = typeof costUsd === 'number' ? ` cost=$${costUsd.toFixed(4)}` : '';
+  log(`${prefix} cache: read=${read} write=${write} fresh=${fresh} out=${out} hitRate=${hitRate}% (in=${totalIn})${cost}`);
+}
+
 // Deferred SDK builtins that either sidestep nanoclaw's own scheduling or
 // don't fit our async message-passing model (they're designed for Claude
 // Code's interactive UI and would hang here).
@@ -304,6 +328,7 @@ export class ClaudeProvider implements AgentProvider {
           yield { type: 'init', continuation: message.session_id };
         } else if (message.type === 'result') {
           const text = 'result' in message ? (message as { result?: string }).result ?? null : null;
+          logCacheUsage('Result', (message as { usage?: CacheUsage }).usage, (message as { total_cost_usd?: number }).total_cost_usd);
           yield { type: 'result', text };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };

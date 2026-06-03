@@ -127,6 +127,39 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
+// Token usage reported on the SDK `result` message. The Claude Agent SDK
+// surfaces the same cache fields the Anthropic API returns, so this is how we
+// see whether prompt caching is actually working (it's managed by the SDK; we
+// can't set cache_control ourselves on this code path).
+interface CacheUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+// Log cache hit rate per turn. Hit rate = cached input / total input tokens.
+// If `read` stays at 0 across turns, a silent invalidator is busting the
+// prefix (e.g. dynamic content in the system prompt or a varying tool set).
+function logCacheUsage(
+  prefix: string,
+  usage: CacheUsage | undefined,
+  costUsd: number | undefined,
+): void {
+  if (!usage) return;
+  const fresh = usage.input_tokens ?? 0;
+  const write = usage.cache_creation_input_tokens ?? 0;
+  const read = usage.cache_read_input_tokens ?? 0;
+  const out = usage.output_tokens ?? 0;
+  const totalIn = fresh + write + read;
+  const hitRate = totalIn > 0 ? ((read / totalIn) * 100).toFixed(1) : '0.0';
+  const cost = typeof costUsd === 'number' ? ` cost=$${costUsd.toFixed(4)}` : '';
+  log(
+    `${prefix} cache: read=${read} write=${write} fresh=${fresh} out=${out} ` +
+      `hitRate=${hitRate}% (in=${totalIn})${cost}`,
+  );
+}
+
 // Truncate large strings for log readability while keeping enough signal to
 // debug a tool call. JSON.stringify handles MCP tool inputs/outputs that are
 // nested objects.
@@ -622,6 +655,11 @@ async function runQuery(
         'result' in message ? (message as { result?: string }).result : null;
       log(
         `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
+      );
+      logCacheUsage(
+        `Result #${resultCount}`,
+        (message as { usage?: CacheUsage }).usage,
+        (message as { total_cost_usd?: number }).total_cost_usd,
       );
       writeOutput({
         status: 'success',
