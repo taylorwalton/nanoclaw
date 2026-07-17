@@ -71,7 +71,8 @@ function createSchema(database: Database.Database): void {
     );
     CREATE TABLE IF NOT EXISTS sessions (
       group_folder TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL
+      session_id TEXT NOT NULL,
+      provider TEXT
     );
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
@@ -83,6 +84,14 @@ function createSchema(database: Database.Database): void {
       requires_trigger INTEGER DEFAULT 1
     );
   `);
+
+  // Add provider column if it doesn't exist (migration for existing DBs).
+  // NULL means "unknown" (pre-migration session) — resume is allowed.
+  try {
+    database.exec(`ALTER TABLE sessions ADD COLUMN provider TEXT`);
+  } catch {
+    /* column already exists */
+  }
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
   try {
@@ -571,10 +580,25 @@ export function getSession(groupFolder: string): string | undefined {
   return row?.session_id;
 }
 
-export function setSession(groupFolder: string, sessionId: string): void {
+export function setSession(
+  groupFolder: string,
+  sessionId: string,
+  provider?: string,
+): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO sessions (group_folder, session_id, provider) VALUES (?, ?, ?)',
+  ).run(groupFolder, sessionId, provider ?? null);
+}
+
+/**
+ * Provider that produced the stored session, or undefined when unknown
+ * (no session, or a row saved before the provider column existed).
+ */
+export function getSessionProvider(groupFolder: string): string | undefined {
+  const row = db
+    .prepare('SELECT provider FROM sessions WHERE group_folder = ?')
+    .get(groupFolder) as { provider: string | null } | undefined;
+  return row?.provider ?? undefined;
 }
 
 export function deleteSession(groupFolder: string): void {

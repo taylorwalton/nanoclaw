@@ -395,6 +395,27 @@ function buildVolumeMounts(
 }
 
 /**
+ * Effective LLM provider for a group after merging .env defaults with the
+ * group's containerConfig. Mirrors buildProviderArgs: 'ollama' only when the
+ * provider is set AND the ollama connection block is present; anything else
+ * falls back to Anthropic.
+ *
+ * Sessions are provider-specific — a transcript generated via the Ollama
+ * Anthropic-compat endpoint can't be resumed against the real Anthropic API
+ * (thinking-block signatures won't validate). Callers use this to detect a
+ * provider switch and drop the stored session instead of resuming it.
+ */
+export function resolveEffectiveProvider(
+  group: RegisteredGroup,
+): 'anthropic' | 'ollama' {
+  const config = mergeProviderConfig(
+    PROVIDER_ENV_DEFAULTS,
+    group.containerConfig,
+  );
+  return config.provider === 'ollama' && config.ollama ? 'ollama' : 'anthropic';
+}
+
+/**
  * Resolve provider-derived env + host-block args.
  *
  * Returns the env and `--add-host` args that the provider config implies,

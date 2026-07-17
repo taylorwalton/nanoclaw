@@ -5,12 +5,14 @@ import fs from 'fs';
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ContainerOutput,
+  resolveEffectiveProvider,
   runContainerAgent,
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
   getAllTasks,
   getDueTasks,
+  getSessionProvider,
   getTaskById,
   logTaskRun,
   updateTask,
@@ -152,8 +154,23 @@ async function runTask(
 
   // For group context mode, use the group's current session
   const sessions = deps.getSessions();
-  const sessionId =
+  let sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
+
+  // Cross-provider resume fails (invalid thinking-block signature) — run the
+  // task without the session. index.ts owns the session map and will clear
+  // the stale entry on the next chat-triggered run.
+  if (sessionId) {
+    const provider = resolveEffectiveProvider(group);
+    const sessionProvider = getSessionProvider(task.group_folder);
+    if (sessionProvider && sessionProvider !== provider) {
+      logger.warn(
+        { taskId: task.id, group: task.group_folder, sessionProvider, provider },
+        'Group session was created by a different provider — running task without it',
+      );
+      sessionId = undefined;
+    }
+  }
 
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the

@@ -3,14 +3,18 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   _initTestDatabase,
   createTask,
+  deleteSession,
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
+  getSession,
+  getSessionProvider,
   getTaskById,
   setRegisteredGroup,
+  setSession,
   storeChatMetadata,
   storeMessage,
   updateTask,
@@ -648,5 +652,36 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+// --- session provider tracking ---
+
+describe('session provider', () => {
+  it('stores and returns the provider alongside the session', () => {
+    setSession('grp', 'sess-1', 'ollama');
+    expect(getSession('grp')).toBe('sess-1');
+    expect(getSessionProvider('grp')).toBe('ollama');
+  });
+
+  it('returns undefined provider when saved without one (legacy rows)', () => {
+    setSession('grp', 'sess-1');
+    expect(getSession('grp')).toBe('sess-1');
+    expect(getSessionProvider('grp')).toBeUndefined();
+  });
+
+  it('overwrites provider on re-save', () => {
+    setSession('grp', 'sess-1', 'ollama');
+    setSession('grp', 'sess-2', 'anthropic');
+    expect(getSession('grp')).toBe('sess-2');
+    expect(getSessionProvider('grp')).toBe('anthropic');
+  });
+
+  it('returns undefined for missing group and after delete', () => {
+    expect(getSessionProvider('nope')).toBeUndefined();
+    setSession('grp', 'sess-1', 'anthropic');
+    deleteSession('grp');
+    expect(getSession('grp')).toBeUndefined();
+    expect(getSessionProvider('grp')).toBeUndefined();
   });
 });
