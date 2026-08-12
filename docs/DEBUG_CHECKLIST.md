@@ -151,6 +151,36 @@ ls -la store/auth/
 npm run auth
 ```
 
+## OneCLI 401: "credentials exist but this agent does not have access"
+
+The container reached the gateway, but the agent it authenticated as has no
+grant to the Anthropic secret. Registering a secret does not grant it.
+
+Main uses OneCLI's default agent; every other group authenticates as an agent
+named after its folder (`agentIdentifier` in `src/container-runner.ts`), so a
+group-specific 401 usually means only that one agent is missing the grant.
+
+```bash
+# Which agent does the failing group use? (lowercased folder, _ -> -)
+onecli agents list
+
+# What does that agent actually have?
+onecli agents grants list --id <agent id>    # expect the secret under "secrets"
+
+# Find the secret, then grant it
+onecli secrets list
+onecli agents grants attach-secret --id <agent id> --secret-id <secret id>
+```
+
+Takes effect immediately — grants are checked per request, no restart needed.
+
+Re-running `scripts/migrate-anthropic-to-vault.sh` grants the secret to every
+agent and is safe to repeat; it exits `4` if any agent was left without access.
+
+Note that `onecli agents secrets` / `set-secrets` are the removed pre-grants
+API. They are still listed in `onecli agents --help` but the gateway answers
+`{"code": "GONE"}`, so help output is not a reliable capability check.
+
 ## Service Management
 
 ```bash

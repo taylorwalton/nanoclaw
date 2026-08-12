@@ -13,10 +13,11 @@
 # Idempotent: re-running detects the existing Vault secret and skips create.
 #
 # Exit codes:
-#   0 = secret registered (and optionally stripped from .env)
+#   0 = secret registered and granted to every agent
 #   1 = preflight failed (no onecli, no .env, no token, gateway down)
 #   2 = secret create call failed
 #   3 = python3 missing (required for JSON parsing)
+#   4 = secret registered but one or more agents were not granted access
 
 set -euo pipefail
 
@@ -39,6 +40,12 @@ done
 log()  { printf '[migrate-anthropic] %s\n' "$*"; }
 warn() { printf '[migrate-anthropic] WARN: %s\n' "$*" >&2; }
 fail() { printf '[migrate-anthropic] FAIL: %s\n' "$*" >&2; exit "${2:-1}"; }
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/onecli-grants.sh
+. "$SCRIPT_DIR/lib/onecli-grants.sh"
+
+GRANT_FAILED=0
 
 # --- Phase 0: prerequisites ---
 
@@ -131,65 +138,15 @@ for s in data:
   fi
 fi
 
-# --- Phase 2.5: assign secret to all detected agents ---
+# --- Phase 2.5: grant secret to all detected agents ---
 #
-# OneCLI's "all" secretMode does NOT auto-include secrets on injection
-# (verified empirically against v1.18.6). Each secret must be explicitly
-# assigned to each agent that should be able to use it. Doing so flips
-# the agent into "selective" mode automatically.
-#
-# Uses `onecli agents set-secrets` which REPLACES the list, so we
-# fetch current assignments first and append the new secret if missing.
+# Registering a secret does NOT make it usable. Each agent must be granted
+# the secret explicitly, or the gateway refuses injection and the container
+# sees a bare 401 ("credentials exist in OneCLI but this agent does not have
+# access"). Non-main groups authenticate as their own agent (see
+# agentIdentifier in src/container-runner.ts), so every agent needs the grant.
 
-assign_secret_to_agent() {
-  local agent_id=$1 agent_label=$2 secret_id=$3
-  # Fetch current secret IDs assigned to this agent
-  local current
-  current=$(onecli agents secrets --id "$agent_id" 2>/dev/null | python3 -c "
-import sys, json
-try:
-  d = json.load(sys.stdin)
-  if isinstance(d, dict): d = d.get('data', [])
-  print(','.join(d))
-except Exception:
-  print('')
-" 2>/dev/null || echo "")
-
-  # Already assigned?
-  case ",$current," in
-    *",$secret_id,"*) log "  agent '$agent_label': already assigned"; return 0 ;;
-  esac
-
-  # Build new list (append)
-  local new_list
-  if [ -z "$current" ]; then
-    new_list="$secret_id"
-  else
-    new_list="${current},${secret_id}"
-  fi
-
-  if onecli agents set-secrets --id "$agent_id" --secret-ids "$new_list" >/dev/null 2>&1; then
-    log "  agent '$agent_label': assigned"
-  else
-    warn "  agent '$agent_label': set-secrets failed"
-  fi
-}
-
-if [ -n "$SECRET_ID" ]; then
-  log "assigning secret to all agents..."
-  AGENTS_JSON=$(curl -sf -m 5 "${ONECLI_URL}/api/agents" 2>/dev/null || echo '[]')
-  printf '%s' "$AGENTS_JSON" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-if isinstance(d, dict): d = d.get('data', [])
-for a in d:
-  print(a.get('id', '') + '\t' + a.get('identifier', '?'))
-" 2>/dev/null | while IFS=$'\t' read -r aid aname; do
-    [ -n "$aid" ] && assign_secret_to_agent "$aid" "$aname" "$SECRET_ID"
-  done
-else
-  warn "could not determine secret ID — skipping agent assignment"
-fi
+onecli_attach_secret_to_all_agents "${SECRET_ID:-}" "$ONECLI_URL" || GRANT_FAILED=1
 
 # --- Phase 3: optionally strip the cred from .env ---
 
@@ -244,4 +201,11 @@ ROLLBACK (if anything breaks):
   sudo systemctl restart talon
 
 EOF
+fi
+
+if [ "$GRANT_FAILED" -ne 0 ]; then
+  warn "secret is in the Vault but NOT granted to every agent — those groups will 401."
+  warn "inspect with: onecli agents grants list --id <agent id from: onecli agents list>"
+  warn "grant with:   onecli agents grants attach-secret --id <agent id> --secret-id ${SECRET_ID:-<secret id>}"
+  exit 4
 fi
