@@ -209,7 +209,16 @@ After OneCLI is running, register your Claude OAuth token (or API key) in the Va
 bash scripts/migrate-anthropic-to-vault.sh
 ```
 
-This reads `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) from `.env` and registers it as an `anthropic` secret bound to `api.anthropic.com`. The raw token stays in `.env` for now so you can verify the Vault path works first.
+This reads `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) from `.env` and registers it as an `anthropic` secret bound to `api.anthropic.com`, then **grants that secret to every OneCLI agent**. The raw token stays in `.env` for now so you can verify the Vault path works first.
+
+Registering a secret is not enough on its own — an agent with no grant to it gets refused at injection time. Non-main groups authenticate as their own agent (`agentIdentifier` in `src/container-runner.ts`), so each group's agent needs the grant. Confirm with:
+
+```bash
+onecli agents list
+onecli agents grants list --id <agent id>   # expect "Anthropic" under secrets
+```
+
+The script exits `4` if the secret registered but any agent was left without access.
 
 Restart Talon and confirm with:
 

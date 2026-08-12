@@ -20,10 +20,11 @@
 # name and skips the create call.
 #
 # Exit codes:
-#   0 = secret registered (and optionally stripped from siem/.env)
+#   0 = secret registered and granted to every agent
 #   1 = preflight failed (no onecli, no siem/.env, no creds, gateway down)
 #   2 = secret create call failed
 #   3 = python3 missing (required for JSON parsing)
+#   4 = secret registered but one or more agents were not granted access
 
 set -euo pipefail
 
@@ -47,6 +48,12 @@ done
 log()  { printf '[migrate-siem] %s\n' "$*"; }
 warn() { printf '[migrate-siem] WARN: %s\n' "$*" >&2; }
 fail() { printf '[migrate-siem] FAIL: %s\n' "$*" >&2; exit "${2:-1}"; }
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/onecli-grants.sh
+. "$SCRIPT_DIR/lib/onecli-grants.sh"
+
+GRANT_FAILED=0
 
 # --- Phase 0: prerequisites ---
 
@@ -141,53 +148,12 @@ for s in data:
   fi
 fi
 
-# --- Phase 3: assign secret to all detected agents ---
+# --- Phase 3: grant secret to all detected agents ---
+#
+# Registering a secret does NOT make it usable — each agent needs an explicit
+# grant or the gateway refuses injection. See scripts/lib/onecli-grants.sh.
 
-assign_secret_to_agent() {
-  local agent_id=$1 agent_label=$2 secret_id=$3
-  local current
-  current=$(onecli agents secrets --id "$agent_id" 2>/dev/null | python3 -c "
-import sys, json
-try:
-  d = json.load(sys.stdin)
-  if isinstance(d, dict): d = d.get('data', [])
-  print(','.join(d))
-except Exception:
-  print('')
-" 2>/dev/null || echo "")
-
-  case ",$current," in
-    *",$secret_id,"*) log "  agent '$agent_label': already assigned"; return 0 ;;
-  esac
-
-  local new_list
-  if [ -z "$current" ]; then
-    new_list="$secret_id"
-  else
-    new_list="${current},${secret_id}"
-  fi
-
-  if onecli agents set-secrets --id "$agent_id" --secret-ids "$new_list" >/dev/null 2>&1; then
-    log "  agent '$agent_label': assigned"
-  else
-    warn "  agent '$agent_label': set-secrets failed"
-  fi
-}
-
-if [ -n "$SECRET_ID" ]; then
-  log "assigning secret to all agents..."
-  curl -sf -m 5 "${ONECLI_URL}/api/agents" 2>/dev/null | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-if isinstance(d, dict): d = d.get('data', [])
-for a in d:
-  print(a.get('id', '') + '\t' + a.get('identifier', '?'))
-" 2>/dev/null | while IFS=$'\t' read -r aid aname; do
-    [ -n "$aid" ] && assign_secret_to_agent "$aid" "$aname" "$SECRET_ID"
-  done
-else
-  warn "could not determine secret ID — skipping agent assignment"
-fi
+onecli_attach_secret_to_all_agents "${SECRET_ID:-}" "$ONECLI_URL" || GRANT_FAILED=1
 
 # --- Phase 4: optionally strip the cred from siem/.env ---
 
@@ -246,4 +212,11 @@ ROLLBACK (if anything breaks):
   sudo systemctl restart talon
 
 EOF
+fi
+
+if [ "$GRANT_FAILED" -ne 0 ]; then
+  warn "secret is in the Vault but NOT granted to every agent — those groups will 401."
+  warn "inspect with: onecli agents grants list --id <agent id from: onecli agents list>"
+  warn "grant with:   onecli agents grants attach-secret --id <agent id> --secret-id ${SECRET_ID:-<secret id>}"
+  exit 4
 fi
