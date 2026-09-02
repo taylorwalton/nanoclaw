@@ -688,6 +688,47 @@ describe('session provider', () => {
   });
 });
 
+// --- messages require a chat row ---
+
+describe('storeMessage foreign key', () => {
+  it('rejects a message for a chat that was never registered', () => {
+    // messages.chat_jid is a FK into chats(jid) and foreign keys are enforced.
+    // A lane registered as a group but missing its chat row therefore throws
+    // on the first inbound message — inside the request handler, before any
+    // response is written, so the caller sees the connection close.
+    expect(() =>
+      storeMessage({
+        id: 'investigate-1',
+        chat_jid: 'http:copilot:investigate',
+        sender: 'copilot-webhook',
+        sender_name: 'CoPilot',
+        content: 'investigate alert 1',
+        timestamp: '100',
+      }),
+    ).toThrow();
+  });
+
+  it('accepts it once the chat row exists', () => {
+    storeChatMetadata(
+      'http:copilot:investigate',
+      '100',
+      'CoPilot Investigations',
+      'http',
+      false,
+    );
+    expect(() =>
+      storeMessage({
+        id: 'investigate-1',
+        chat_jid: 'http:copilot:investigate',
+        sender: 'copilot-webhook',
+        sender_name: 'CoPilot',
+        content: 'investigate alert 1',
+        timestamp: '100',
+      }),
+    ).not.toThrow();
+  });
+});
+
 // --- session context size ---
 
 describe('session usage', () => {

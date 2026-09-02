@@ -319,6 +319,51 @@ describe('per-user lanes', () => {
   });
 });
 
+describe('lane registration', () => {
+  function registerLane(channel: HttpChannel, jid: string, name: string) {
+    (
+      channel as unknown as {
+        registerLane: (jid: string, group: unknown) => void;
+      }
+    ).registerLane(jid, { name, folder: 'copilot' });
+  }
+
+  it('creates the chat row alongside the group entry', () => {
+    // Registering a lane without its chat row makes the first inbound message
+    // fail a foreign key inside the request handler, so the caller gets a
+    // closed connection instead of a response. Both writes, always together.
+    const { channel, opts } = makeChannelWithRegistry();
+
+    registerLane(channel, INVESTIGATE_JID, 'CoPilot Investigations');
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      INVESTIGATE_JID,
+      expect.objectContaining({ name: 'CoPilot Investigations' }),
+    );
+    expect(opts.onChatMetadata).toHaveBeenCalledWith(
+      INVESTIGATE_JID,
+      expect.any(String),
+      'CoPilot Investigations',
+      'http',
+      false,
+    );
+  });
+
+  it('registers a chat row for every user lane it hands out', () => {
+    const { channel, opts } = makeChannelWithRegistry();
+
+    const jid = laneFor(channel, '42', 'Dana');
+
+    expect(opts.onChatMetadata).toHaveBeenCalledWith(
+      jid,
+      expect.any(String),
+      'CoPilot — Dana',
+      'http',
+      false,
+    );
+  });
+});
+
 describe('session reset scoping', () => {
   it('resets only the requesting user’s lane', () => {
     const { channel, opts } = makeChannelWithRegistry();
