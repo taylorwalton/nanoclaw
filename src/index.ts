@@ -800,6 +800,13 @@ async function main(): Promise<void> {
       logger.info({ jid, group: group.name }, 'Session cleared');
       return true;
     },
+    unregisterGroup: (jid: string) => {
+      if (!registeredGroups[jid]) return false;
+      delete registeredGroups[jid];
+      delete lastAgentTimestamp[jid];
+      saveState();
+      return true;
+    },
   };
 
   // Create and connect all registered channels.

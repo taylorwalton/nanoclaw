@@ -28,6 +28,46 @@ const COPILOT_JID = process.env.COPILOT_JID || 'http:copilot';
 // persisted. Keeps raw SIEM documents out of the analyst chat context, and
 // keeps one alert's findings from leaking into the next investigation.
 const COPILOT_INVESTIGATE_JID = `${COPILOT_JID}:investigate`;
+// Prefix for per-analyst chat lanes. Each signed-in CoPilot user gets their own
+// conversation: separate session, separate queue slot, separate SSE writer.
+// Without this, two analysts chatting at once are batched into a single prompt
+// and a single turn, and each can receive the other's reply.
+const COPILOT_USER_JID_PREFIX = `${COPILOT_JID}:u:`;
+// Session/IPC key prefix for a per-user lane. Kept next to the JID prefix so
+// the two can't drift — GET /status maps one back to the other.
+const USER_SESSION_KEY_PREFIX = 'copilot-u-';
+// A request that names no user falls back to the base lane, so callers written
+// before per-user lanes keep working (and keep their existing conversation).
+const ANON_LANE_JID = COPILOT_JID;
+// Lanes are dropped after this long without traffic: they accumulate as staff
+// come and go, and each one pins an abandoned transcript on disk.
+const USER_LANE_IDLE_MS =
+  Math.max(1, parseInt(process.env.SESSION_IDLE_HOURS || '24', 10) || 24) *
+  60 *
+  60 *
+  1000;
+const LANE_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+
+/**
+ * Reduce a CoPilot user id to something safe to embed in a JID, a session key
+ * and a filesystem path. Anything unrecognised collapses to the anonymous
+ * lane rather than being silently mangled into a neighbouring user's key.
+ */
+export function normalizeUserId(raw: unknown): string | null {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  const cleaned = String(raw)
+    .trim()
+    .replace(/[^A-Za-z0-9_-]/g, '')
+    // Bounded so `copilot-u-<id>` still satisfies the 64-character group
+    // folder pattern the session and IPC path resolvers enforce.
+    .slice(0, 48);
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+/** JID of the lane owned by a CoPilot user id. */
+export function laneJidForUser(userId: string): string {
+  return `${COPILOT_USER_JID_PREFIX}${userId}`;
+}
 const COPILOT_GROUP_FOLDER = process.env.COPILOT_GROUP_FOLDER || 'copilot';
 const COPILOT_HTTP_PORT = parseInt(process.env.COPILOT_HTTP_PORT || '3100', 10);
 const HTTP_API_KEY = readEnvFile(['HTTP_API_KEY']).HTTP_API_KEY || '';
@@ -53,6 +93,13 @@ export class HttpChannel implements Channel {
   private opts: ChannelOpts;
   private startedAt = Date.now();
   private activeInvestigations = 0;
+
+  // Template the per-user lanes are cloned from — captured at connect() so the
+  // mount set and container config stay identical across every lane.
+  private baseGroup: RegisteredGroup | null = null;
+  // Last inbound message per user lane, for the idle sweep.
+  private laneLastSeen = new Map<string, number>();
+  private sweepTimer: NodeJS.Timeout | null = null;
 
   // SSE writers are tracked per lane. A single global FIFO cannot correlate a
   // response with the request that produced it: concurrent callers, or an
@@ -179,6 +226,74 @@ export class HttpChannel implements Channel {
     );
   }
 
+  /**
+   * Resolve the lane for an inbound chat message, registering it on first use.
+   *
+   * Lanes are cloned from the base group, so they share the folder — same
+   * CLAUDE.md, prompts and mounts — and differ only in identity: their own
+   * session, IPC namespace, queue slot and SSE writer.
+   */
+  private ensureUserLane(userId: string | null, userName?: string): string {
+    if (!userId) return ANON_LANE_JID;
+
+    const jid = laneJidForUser(userId);
+    this.laneLastSeen.set(jid, Date.now());
+
+    if (this.opts.registeredGroups()[jid]) return jid;
+    if (!this.baseGroup) {
+      // connect() hasn't run — nothing to clone from. Fall back rather than
+      // registering a half-built lane with no mounts.
+      logger.warn({ jid }, 'HTTP channel: no base group, using anon lane');
+      return ANON_LANE_JID;
+    }
+
+    const label = (userName ?? '').trim().slice(0, 64) || userId;
+    this.opts.registerGroup?.(jid, {
+      ...this.baseGroup,
+      name: `CoPilot — ${label}`,
+      sessionKey: `${USER_SESSION_KEY_PREFIX}${userId}`,
+      ipcKey: `${USER_SESSION_KEY_PREFIX}${userId}`,
+      trustedSessionCommands: true,
+    });
+    // isGroup=false keeps these out of the main group's activatable-group list.
+    this.opts.onChatMetadata(
+      jid,
+      new Date().toISOString(),
+      `CoPilot — ${label}`,
+      'http',
+      false,
+    );
+    logger.info({ jid, userId }, 'HTTP channel: registered user lane');
+    return jid;
+  }
+
+  /** Every registered per-user lane JID. */
+  private userLaneJids(): string[] {
+    return Object.keys(this.opts.registeredGroups()).filter((jid) =>
+      jid.startsWith(COPILOT_USER_JID_PREFIX),
+    );
+  }
+
+  /**
+   * Drop lanes with no recent traffic, releasing their stored session and the
+   * transcript it pins. A lane with an open SSE stream is never swept.
+   */
+  private sweepIdleLanes(): void {
+    const cutoff = Date.now() - USER_LANE_IDLE_MS;
+    for (const jid of this.userLaneJids()) {
+      const lastSeen = this.laneLastSeen.get(jid) ?? 0;
+      if (lastSeen > cutoff) continue;
+      if (this.active.has(jid) || (this.pending.get(jid)?.length ?? 0) > 0) {
+        continue;
+      }
+      this.opts.clearSession?.(jid);
+      this.opts.unregisterGroup?.(jid);
+      this.laneLastSeen.delete(jid);
+      this.pending.delete(jid);
+      logger.info({ jid }, 'HTTP channel: swept idle user lane');
+    }
+  }
+
   async connect(): Promise<void> {
     if (!HTTP_API_KEY) {
       throw new Error(
@@ -255,10 +370,8 @@ export class HttpChannel implements Channel {
     // this server is rejected without HTTP_API_KEY (see the auth check below)
     // and CoPilot's own route is scope-checked — a stronger guarantee than the
     // is_from_me flag this would otherwise require.
-    this.opts.registerGroup?.(COPILOT_JID, {
-      ...group,
-      trustedSessionCommands: true,
-    });
+    this.baseGroup = { ...group, trustedSessionCommands: true };
+    this.opts.registerGroup?.(COPILOT_JID, this.baseGroup);
 
     // Investigation lane: same folder and mounts, separate ephemeral session.
     // No trustedSessionCommands — nothing types slash commands at it.
@@ -271,6 +384,12 @@ export class HttpChannel implements Channel {
     });
 
     this.seedAlertDigestTask();
+    this.sweepTimer = setInterval(
+      () => this.sweepIdleLanes(),
+      LANE_SWEEP_INTERVAL_MS,
+    );
+    // Don't hold the process open just to run the sweep.
+    this.sweepTimer.unref?.();
 
     this.opts.onChatMetadata(
       COPILOT_JID,
@@ -307,6 +426,11 @@ export class HttpChannel implements Channel {
           .filter((row) => row.group_folder.startsWith(COPILOT_GROUP_FOLDER))
           .map((row) => ({
             lane: row.group_folder,
+            // Named explicitly so callers don't have to parse the key format
+            // to find their own lane. null for the shared/anon lane.
+            user_id: row.group_folder.startsWith(USER_SESSION_KEY_PREFIX)
+              ? row.group_folder.slice(USER_SESSION_KEY_PREFIX.length)
+              : null,
             session_id: row.session_id,
             input_tokens: row.input_tokens,
             updated_at: row.updated_at,
@@ -338,7 +462,7 @@ export class HttpChannel implements Channel {
           body += chunk;
         });
         req.on('end', () => {
-          let parsed: { scope?: string } = {};
+          let parsed: { scope?: string; user_id?: string | number } = {};
           if (body.trim()) {
             try {
               parsed = JSON.parse(body);
@@ -350,13 +474,19 @@ export class HttpChannel implements Channel {
           }
 
           const scope = parsed.scope || 'chat';
+          const userId = normalizeUserId(parsed.user_id);
+
+          // 'chat' resets the caller's own lane. That is the important
+          // property: an analyst clearing their conversation must not clear
+          // a colleague's. Without a user_id it falls back to the shared
+          // anonymous lane, which is the one such a caller is using anyway.
           const targets: string[] =
             scope === 'all'
-              ? [COPILOT_JID, COPILOT_INVESTIGATE_JID]
+              ? [COPILOT_JID, COPILOT_INVESTIGATE_JID, ...this.userLaneJids()]
               : scope === 'investigate'
                 ? [COPILOT_INVESTIGATE_JID]
                 : scope === 'chat'
-                  ? [COPILOT_JID]
+                  ? [userId ? laneJidForUser(userId) : ANON_LANE_JID]
                   : [];
 
           if (targets.length === 0) {
@@ -372,7 +502,10 @@ export class HttpChannel implements Channel {
           const cleared = targets.filter(
             (jid) => this.opts.clearSession?.(jid) === true,
           );
-          logger.info({ scope, cleared }, 'HTTP channel: session reset');
+          logger.info(
+            { scope, userId, cleared },
+            'HTTP channel: session reset',
+          );
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ cleared: cleared.length, lanes: cleared }));
@@ -804,7 +937,12 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
           body += chunk;
         });
         req.on('end', () => {
-          let parsed: { message?: string; sender?: string } = {};
+          let parsed: {
+            message?: string;
+            sender?: string;
+            user_id?: string | number;
+            user_name?: string;
+          } = {};
           try {
             parsed = JSON.parse(body);
           } catch {
@@ -821,6 +959,12 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
           }
 
           const senderName = parsed.sender || 'copilot';
+          // Resolve the caller's lane before opening the stream, so the writer
+          // is queued against the same JID the reply will be written to.
+          const laneJid = this.ensureUserLane(
+            normalizeUserId(parsed.user_id),
+            parsed.user_name,
+          );
 
           // Start SSE response
           res.writeHead(200, {
@@ -835,9 +979,9 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
           // req.on('close') fires when the POST body is consumed (almost immediately).
           new Promise<void>((resolve) => {
             const writer: SseWriter = { res, resolve };
-            const queue = this.pending.get(COPILOT_JID) ?? [];
+            const queue = this.pending.get(laneJid) ?? [];
             queue.push(writer);
-            this.pending.set(COPILOT_JID, queue);
+            this.pending.set(laneJid, queue);
 
             // Start SSE keepalive immediately. The agent may take 30–90s to
             // boot the container + produce its first chunk; without periodic
@@ -855,19 +999,19 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
                 clearInterval(writer.keepalive);
                 writer.keepalive = undefined;
               }
-              const q = this.pending.get(COPILOT_JID);
+              const q = this.pending.get(laneJid);
               const idx = q ? q.indexOf(writer) : -1;
               if (q && idx !== -1) q.splice(idx, 1);
-              if (this.active.get(COPILOT_JID) === writer) {
-                this.active.delete(COPILOT_JID);
+              if (this.active.get(laneJid) === writer) {
+                this.active.delete(laneJid);
               }
               resolve();
             });
 
             // Route into NanoClaw's pipeline — GroupQueue → container → agent
-            this.opts.onMessage(COPILOT_JID, {
+            this.opts.onMessage(laneJid, {
               id: `http-${Date.now()}`,
-              chat_jid: COPILOT_JID,
+              chat_jid: laneJid,
               sender: senderName,
               sender_name: senderName,
               content: message,
@@ -876,7 +1020,7 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
             });
 
             logger.info(
-              { sender: senderName, length: message.length },
+              { lane: laneJid, sender: senderName, length: message.length },
               'HTTP channel: message received',
             );
           });
@@ -893,7 +1037,7 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
         logger.info({ port: COPILOT_HTTP_PORT }, 'HTTP channel listening');
         console.log(`\n  HTTP channel: http://localhost:${COPILOT_HTTP_PORT}`);
         console.log(
-          `  POST /message     { "message": "...", "sender": "..." }`,
+          `  POST /message     { "message": "...", "sender": "...", "user_id": "..." }`,
         );
         console.log(
           `  POST /investigate    { "alert_id": 123, "customer_code": "acme", "template_override": "sysmon_event_1.txt" }`,
@@ -909,7 +1053,7 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
         console.log(`  POST /palace/forget   { "drawer_id": "..." }`);
         console.log(`  GET  /status`);
         console.log(
-          `  POST /session/reset { "scope": "chat|investigate|all" }`,
+          `  POST /session/reset { "scope": "chat|investigate|all", "user_id": "..." }`,
         );
         console.log(`  GET  /health\n`);
         resolve();
@@ -1002,6 +1146,10 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
   }
 
   async disconnect(): Promise<void> {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     if (this.server) {
       this.server.close();
       this.server = null;

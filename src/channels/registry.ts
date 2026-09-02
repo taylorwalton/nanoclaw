@@ -14,6 +14,9 @@ export interface ChannelOpts {
   // Optional — drops a lane's stored session (in memory and on disk) so the
   // next run starts from empty context. Returns false for an unknown JID.
   clearSession?: (jid: string) => boolean;
+  // Optional — drops an in-memory lane registration. Used to retire per-user
+  // lanes that have gone idle; never removes a persisted group.
+  unregisterGroup?: (jid: string) => boolean;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;
