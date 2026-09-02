@@ -39,6 +39,24 @@ describe('extractSessionCommand', () => {
   it('is case-sensitive for the command', () => {
     expect(extractSessionCommand('/Compact', trigger)).toBeNull();
   });
+
+  it('detects bare /new', () => {
+    expect(extractSessionCommand('/new', trigger)).toBe('/new');
+  });
+
+  it('detects /new with trigger prefix', () => {
+    expect(extractSessionCommand('@Andy /new', trigger)).toBe('/new');
+  });
+
+  it('canonicalises /reset and /clear to /new', () => {
+    expect(extractSessionCommand('/reset', trigger)).toBe('/new');
+    expect(extractSessionCommand('/clear', trigger)).toBe('/new');
+  });
+
+  it('rejects an unknown slash command', () => {
+    // Must fall through as an ordinary prompt, not be swallowed as a command.
+    expect(extractSessionCommand('/deploy', trigger)).toBeNull();
+  });
 });
 
 describe('isSessionCommandAllowed', () => {
@@ -56,6 +74,14 @@ describe('isSessionCommandAllowed', () => {
 
   it('allows trusted sender in main group', () => {
     expect(isSessionCommandAllowed(true, true)).toBe(true);
+  });
+
+  it('allows an authenticated channel in a non-main group', () => {
+    expect(isSessionCommandAllowed(false, false, true)).toBe(true);
+  });
+
+  it('still denies an unauthenticated channel in a non-main group', () => {
+    expect(isSessionCommandAllowed(false, false, false)).toBe(false);
   });
 });
 
@@ -85,6 +111,7 @@ function makeDeps(
     advanceCursor: vi.fn(),
     formatMessages: vi.fn().mockReturnValue('<formatted>'),
     canSenderInteract: vi.fn().mockReturnValue(true),
+    clearSession: vi.fn(),
     ...overrides,
   };
 }
@@ -121,6 +148,98 @@ describe('handleSessionCommand', () => {
       expect.any(Function),
     );
     expect(deps.advanceCursor).toHaveBeenCalledWith('100');
+  });
+
+  it('handles /new without running the agent', async () => {
+    // Dropping the stored session id IS the whole operation — spending a
+    // container run (and a full turn of tokens) on it would be waste.
+    const deps = makeDeps();
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/new')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.clearSession).toHaveBeenCalledTimes(1);
+    expect(deps.runAgent).not.toHaveBeenCalled();
+    expect(deps.advanceCursor).toHaveBeenCalledWith('100');
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      'New session started. Previous context cleared.',
+    );
+  });
+
+  it('does not flush earlier messages into a context it is about to discard', async () => {
+    const deps = makeDeps();
+    await handleSessionCommand({
+      missedMessages: [
+        makeMsg('some earlier chatter', { timestamp: '50' }),
+        makeMsg('/new', { timestamp: '100' }),
+      ],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+
+    expect(deps.runAgent).not.toHaveBeenCalled();
+    expect(deps.formatMessages).not.toHaveBeenCalled();
+    expect(deps.clearSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts /reset as an alias for /new', async () => {
+    const deps = makeDeps();
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/reset')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.clearSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows /new from a trusted channel in a non-main group', async () => {
+    const deps = makeDeps();
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/new', { is_from_me: false })],
+      isMainGroup: false,
+      groupName: 'copilot',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      isTrustedChannel: true,
+      deps,
+    });
+
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.clearSession).toHaveBeenCalledTimes(1);
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      'New session started. Previous context cleared.',
+    );
+  });
+
+  it('denies /new from an untrusted channel in a non-main group', async () => {
+    const deps = makeDeps();
+    await handleSessionCommand({
+      missedMessages: [makeMsg('/new', { is_from_me: false })],
+      isMainGroup: false,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+
+    expect(deps.clearSession).not.toHaveBeenCalled();
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      'Session commands require admin access.',
+    );
   });
 
   it('sends denial to interactable sender in non-main group', async () => {

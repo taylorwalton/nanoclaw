@@ -1,9 +1,18 @@
 import type { NewMessage } from './types.js';
 import { logger } from './logger.js';
 
+/** Session commands the orchestrator understands. Matched case-sensitively. */
+const SESSION_COMMANDS = new Set(['/compact', '/new']);
+
+/** Alternate spellings that mean the same thing as a canonical command. */
+const COMMAND_ALIASES: Record<string, string> = {
+  '/reset': '/new',
+  '/clear': '/new',
+};
+
 /**
  * Extract a session slash command from a message, stripping the trigger prefix if present.
- * Returns the slash command (e.g., '/compact') or null if not a session command.
+ * Returns the canonical slash command (e.g., '/compact') or null if not a session command.
  */
 export function extractSessionCommand(
   content: string,
@@ -11,19 +20,27 @@ export function extractSessionCommand(
 ): string | null {
   let text = content.trim();
   text = text.replace(triggerPattern, '').trim();
-  if (text === '/compact') return '/compact';
-  return null;
+  const canonical = COMMAND_ALIASES[text] ?? text;
+  return SESSION_COMMANDS.has(canonical) ? canonical : null;
 }
 
 /**
  * Check if a session command sender is authorized.
- * Allowed: main group (any sender), or trusted/admin sender (is_from_me) in any group.
+ * Allowed: main group (any sender), a trusted/admin sender (is_from_me) in any
+ * group, or any sender on a channel that authenticates its own callers.
+ *
+ * The third case exists for the CoPilot HTTP channel, which rejects every
+ * request lacking HTTP_API_KEY and is fronted by a scope-checked CoPilot route.
+ * That is a stronger guarantee than is_from_me on a chat channel — but it is
+ * granted as its own flag rather than by marking the lane isMain, which would
+ * also hand it the main group's elevated privileges.
  */
 export function isSessionCommandAllowed(
   isMainGroup: boolean,
   isFromMe: boolean,
+  isTrustedChannel = false,
 ): boolean {
-  return isMainGroup || isFromMe;
+  return isMainGroup || isFromMe || isTrustedChannel;
 }
 
 /** Minimal agent result interface — matches the subset of ContainerOutput used here. */
@@ -45,6 +62,8 @@ export interface SessionCommandDeps {
   formatMessages: (msgs: NewMessage[], timezone: string) => string;
   /** Whether the denied sender would normally be allowed to interact (for denial messages). */
   canSenderInteract: (msg: NewMessage) => boolean;
+  /** Drop this lane's stored session so the next run starts from empty context. */
+  clearSession: () => void;
 }
 
 function resultToText(result: string | object | null | undefined): string {
@@ -65,6 +84,7 @@ export async function handleSessionCommand(opts: {
   groupName: string;
   triggerPattern: RegExp;
   timezone: string;
+  isTrustedChannel?: boolean;
   deps: SessionCommandDeps;
 }): Promise<{ handled: false } | { handled: true; success: boolean }> {
   const {
@@ -73,6 +93,7 @@ export async function handleSessionCommand(opts: {
     groupName,
     triggerPattern,
     timezone,
+    isTrustedChannel = false,
     deps,
   } = opts;
 
@@ -85,7 +106,13 @@ export async function handleSessionCommand(opts: {
 
   if (!command || !cmdMsg) return { handled: false };
 
-  if (!isSessionCommandAllowed(isMainGroup, cmdMsg.is_from_me === true)) {
+  if (
+    !isSessionCommandAllowed(
+      isMainGroup,
+      cmdMsg.is_from_me === true,
+      isTrustedChannel,
+    )
+  ) {
     // DENIED: send denial if the sender would normally be allowed to interact,
     // then silently consume the command by advancing the cursor past it.
     // Trade-off: other messages in the same batch are also consumed (cursor is
@@ -97,9 +124,20 @@ export async function handleSessionCommand(opts: {
     return { handled: true, success: true };
   }
 
-  // AUTHORIZED: process pre-compact messages first, then run the command
   logger.info({ group: groupName, command }, 'Session command');
 
+  // /new needs no container at all — dropping the stored session id IS the
+  // whole operation. Handle it before the pre-command flush below: feeding
+  // messages into a context we are about to discard costs a full turn and
+  // buys nothing.
+  if (command === '/new') {
+    deps.clearSession();
+    deps.advanceCursor(cmdMsg.timestamp);
+    await deps.sendMessage('New session started. Previous context cleared.');
+    return { handled: true, success: true };
+  }
+
+  // AUTHORIZED: process pre-compact messages first, then run the command
   const cmdIndex = missedMessages.indexOf(cmdMsg);
   const preCompactMsgs = missedMessages.slice(0, cmdIndex);
 

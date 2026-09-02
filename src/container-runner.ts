@@ -24,6 +24,7 @@ import {
 } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { ipcKeyFor } from './session-lane.js';
 import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
@@ -67,11 +68,24 @@ export interface ContainerInput {
   script?: string;
 }
 
+/**
+ * Token usage for one agent turn, as reported by the SDK `result` message.
+ * Context size is the sum of the three input figures — that is what grows
+ * without bound when a session is resumed indefinitely.
+ */
+export interface SessionUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
 export interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  usage?: SessionUsage;
 }
 
 interface VolumeMount {
@@ -243,9 +257,10 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Per-group IPC namespace: each group gets its own IPC directory
-  // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
+  // Per-lane IPC namespace: each lane gets its own IPC directory. This
+  // prevents cross-group privilege escalation via IPC, and keeps two lanes
+  // that share a group folder from reading each other's piped input.
+  const groupIpcDir = resolveGroupIpcPath(ipcKeyFor(group));
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
@@ -1007,9 +1022,14 @@ export function writeTasksSnapshot(
     status: string;
     next_run: string | null;
   }>,
+  // IPC namespace to write into. Defaults to the group folder; lanes that
+  // share a folder pass their own key so they don't overwrite each other.
+  ipcKey?: string,
 ): void {
-  // Write filtered tasks to the group's IPC directory
-  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  // Write filtered tasks to the lane's IPC directory. Note the filter below
+  // still keys on groupFolder — task ownership is a property of the group,
+  // not of the lane reading the snapshot.
+  const groupIpcDir = resolveGroupIpcPath(ipcKey ?? groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });
 
   // Main sees all tasks, others only see their own
@@ -1038,8 +1058,9 @@ export function writeGroupsSnapshot(
   isMain: boolean,
   groups: AvailableGroup[],
   _registeredJids: Set<string>,
+  ipcKey?: string,
 ): void {
-  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  const groupIpcDir = resolveGroupIpcPath(ipcKey ?? groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });
 
   // Main sees all groups; others see nothing (they can't activate groups)

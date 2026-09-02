@@ -93,6 +93,16 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Last-turn context size, so operators can see a session growing before it
+  // starts costing minutes per reply. NULL means "no turn recorded yet".
+  for (const column of ['input_tokens INTEGER', 'updated_at TEXT']) {
+    try {
+      database.exec(`ALTER TABLE sessions ADD COLUMN ${column}`);
+    } catch {
+      /* column already exists */
+    }
+  }
+
   // Add context_mode column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -599,6 +609,38 @@ export function getSessionProvider(groupFolder: string): string | undefined {
     .prepare('SELECT provider FROM sessions WHERE group_folder = ?')
     .get(groupFolder) as { provider: string | null } | undefined;
   return row?.provider ?? undefined;
+}
+
+/**
+ * Record the context size of a session's most recent turn.
+ *
+ * Kept separate from setSession because it is advisory: a failed write must
+ * never take down the turn that produced the number.
+ */
+export function recordSessionUsage(
+  groupFolder: string,
+  inputTokens: number,
+): void {
+  db.prepare(
+    'UPDATE sessions SET input_tokens = ?, updated_at = ? WHERE group_folder = ?',
+  ).run(inputTokens, new Date().toISOString(), groupFolder);
+}
+
+export interface SessionRow {
+  group_folder: string;
+  session_id: string;
+  provider: string | null;
+  input_tokens: number | null;
+  updated_at: string | null;
+}
+
+/** Every stored session with its last recorded context size. */
+export function getSessionRows(): SessionRow[] {
+  return db
+    .prepare(
+      'SELECT group_folder, session_id, provider, input_tokens, updated_at FROM sessions',
+    )
+    .all() as SessionRow[];
 }
 
 export function deleteSession(groupFolder: string): void {
