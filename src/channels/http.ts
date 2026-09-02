@@ -227,6 +227,29 @@ export class HttpChannel implements Channel {
   }
 
   /**
+   * Register a lane: its group entry AND its chat row, always together.
+   *
+   * `messages.chat_jid` is a foreign key into `chats(jid)`, and foreign keys
+   * are enforced. A lane registered as a group but missing its chat row
+   * cannot store an inbound message — `storeMessage` throws inside the
+   * request handler, before a response is written, so the caller sees the
+   * connection close rather than an error. Keeping both writes in one place
+   * is what stops the two from drifting apart again.
+   *
+   * isGroup=false keeps these out of the main group's activatable-group list.
+   */
+  private registerLane(jid: string, group: RegisteredGroup): void {
+    this.opts.registerGroup?.(jid, group);
+    this.opts.onChatMetadata(
+      jid,
+      new Date().toISOString(),
+      group.name,
+      'http',
+      false,
+    );
+  }
+
+  /**
    * Resolve the lane for an inbound chat message, registering it on first use.
    *
    * Lanes are cloned from the base group, so they share the folder — same
@@ -248,21 +271,13 @@ export class HttpChannel implements Channel {
     }
 
     const label = (userName ?? '').trim().slice(0, 64) || userId;
-    this.opts.registerGroup?.(jid, {
+    this.registerLane(jid, {
       ...this.baseGroup,
       name: `CoPilot — ${label}`,
       sessionKey: `${USER_SESSION_KEY_PREFIX}${userId}`,
       ipcKey: `${USER_SESSION_KEY_PREFIX}${userId}`,
       trustedSessionCommands: true,
     });
-    // isGroup=false keeps these out of the main group's activatable-group list.
-    this.opts.onChatMetadata(
-      jid,
-      new Date().toISOString(),
-      `CoPilot — ${label}`,
-      'http',
-      false,
-    );
     logger.info({ jid, userId }, 'HTTP channel: registered user lane');
     return jid;
   }
@@ -371,11 +386,11 @@ export class HttpChannel implements Channel {
     // and CoPilot's own route is scope-checked — a stronger guarantee than the
     // is_from_me flag this would otherwise require.
     this.baseGroup = { ...group, trustedSessionCommands: true };
-    this.opts.registerGroup?.(COPILOT_JID, this.baseGroup);
+    this.registerLane(COPILOT_JID, this.baseGroup);
 
     // Investigation lane: same folder and mounts, separate ephemeral session.
     // No trustedSessionCommands — nothing types slash commands at it.
-    this.opts.registerGroup?.(COPILOT_INVESTIGATE_JID, {
+    this.registerLane(COPILOT_INVESTIGATE_JID, {
       ...group,
       name: 'CoPilot Investigations',
       sessionKey: 'copilot-investigate',
@@ -390,14 +405,6 @@ export class HttpChannel implements Channel {
     );
     // Don't hold the process open just to run the sweep.
     this.sweepTimer.unref?.();
-
-    this.opts.onChatMetadata(
-      COPILOT_JID,
-      new Date().toISOString(),
-      'CoPilot',
-      'http',
-      false,
-    );
 
     this.server = http.createServer((req, res) => {
       if (req.method === 'GET' && req.url === '/health') {
