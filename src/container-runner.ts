@@ -22,9 +22,13 @@ import {
   mergeProviderConfig,
   readEnvFile,
 } from './env.js';
-import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
+import {
+  resolveGroupFolderPath,
+  resolveGroupIpcPath,
+  resolveGroupSessionsPath,
+} from './group-folder.js';
 import { logger } from './logger.js';
-import { ipcKeyFor } from './session-lane.js';
+import { ipcKeyFor, sessionKeyFor } from './session-lane.js';
 import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
@@ -160,12 +164,12 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
+  // Per-lane Claude sessions directory. Each lane gets its own .claude/ to
+  // prevent cross-group session access — and, for lanes that share a group
+  // folder, to keep concurrent containers off the same transcripts, settings
+  // and session index.
   const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
+    resolveGroupSessionsPath(sessionKeyFor(group)),
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });

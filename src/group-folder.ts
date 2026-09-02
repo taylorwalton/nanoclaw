@@ -35,6 +35,19 @@ export function resolveGroupFolderPath(folder: string): string {
   return groupPath;
 }
 
+/**
+ * Directory holding a lane's agent session store (its `.claude/`). Keyed on
+ * the lane, not the group folder, so concurrent lanes that share a folder do
+ * not write to the same transcripts, settings and session index.
+ */
+export function resolveGroupSessionsPath(folder: string): string {
+  assertValidGroupFolder(folder);
+  const sessionsBaseDir = path.resolve(DATA_DIR, 'sessions');
+  const sessionsPath = path.resolve(sessionsBaseDir, folder);
+  ensureWithinBase(sessionsBaseDir, sessionsPath);
+  return sessionsPath;
+}
+
 export function resolveGroupIpcPath(folder: string): string {
   assertValidGroupFolder(folder);
   const ipcBaseDir = path.resolve(DATA_DIR, 'ipc');
