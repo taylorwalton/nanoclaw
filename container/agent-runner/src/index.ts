@@ -40,6 +40,9 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  // Token usage for the turn. Reported so the host can show analysts how large
+  // a session has grown before it starts costing them minutes per reply.
+  usage?: CacheUsage;
 }
 
 interface SessionEntry {
@@ -665,6 +668,7 @@ async function runQuery(
         status: 'success',
         result: textResult || null,
         newSessionId,
+        usage: (message as { usage?: CacheUsage }).usage,
       });
     }
   }

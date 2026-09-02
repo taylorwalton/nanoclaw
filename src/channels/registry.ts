@@ -11,6 +11,9 @@ export interface ChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
   // Optional — lets channels self-register a group at connect time.
   registerGroup?: (jid: string, group: RegisteredGroup) => void;
+  // Optional — drops a lane's stored session (in memory and on disk) so the
+  // next run starts from empty context. Returns false for an unknown JID.
+  clearSession?: (jid: string) => boolean;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

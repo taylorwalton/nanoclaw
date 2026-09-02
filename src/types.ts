@@ -85,6 +85,29 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  /**
+   * Key under which this lane's agent session id is stored. Defaults to
+   * `folder`. Lets several JIDs share one group folder — same CLAUDE.md,
+   * prompts and mounts — while holding separate conversations.
+   */
+  sessionKey?: string;
+  /**
+   * IPC namespace for the lane's container. Defaults to `folder`. MUST be
+   * unique per concurrently running container, or piped follow-up messages
+   * land in the wrong one.
+   */
+  ipcKey?: string;
+  /**
+   * Never resume a stored session and never persist a new one. For one-shot
+   * workloads (alert investigations) where carrying context between runs only
+   * costs tokens and leaks one alert's findings into the next.
+   */
+  ephemeralSession?: boolean;
+  /**
+   * The channel authenticates its own callers, so session commands (/compact,
+   * /new) are allowed without `isMain` or `is_from_me`.
+   */
+  trustedSessionCommands?: boolean;
 }
 
 export interface NewMessage {

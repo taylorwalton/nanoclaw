@@ -12,7 +12,9 @@ import {
   getNewMessages,
   getSession,
   getSessionProvider,
+  getSessionRows,
   getTaskById,
+  recordSessionUsage,
   setRegisteredGroup,
   setSession,
   storeChatMetadata,
@@ -683,5 +685,55 @@ describe('session provider', () => {
     deleteSession('grp');
     expect(getSession('grp')).toBeUndefined();
     expect(getSessionProvider('grp')).toBeUndefined();
+  });
+});
+
+// --- session context size ---
+
+describe('session usage', () => {
+  it('records the last turn context size against the session key', () => {
+    setSession('copilot', 'sess-1', 'anthropic');
+    recordSessionUsage('copilot', 312_410);
+
+    const row = getSessionRows().find((r) => r.group_folder === 'copilot');
+    expect(row?.input_tokens).toBe(312_410);
+    expect(row?.updated_at).toBeTruthy();
+  });
+
+  it('reports null context size until a turn is recorded', () => {
+    setSession('copilot', 'sess-1', 'anthropic');
+
+    const row = getSessionRows().find((r) => r.group_folder === 'copilot');
+    expect(row?.input_tokens).toBeNull();
+  });
+
+  it('keeps lanes that share a group folder on separate rows', () => {
+    setSession('copilot', 'chat-session', 'anthropic');
+    setSession('copilot-u-42', 'user-session', 'anthropic');
+    recordSessionUsage('copilot', 100);
+    recordSessionUsage('copilot-u-42', 900);
+
+    const rows = getSessionRows();
+    expect(rows.find((r) => r.group_folder === 'copilot')?.input_tokens).toBe(
+      100,
+    );
+    expect(
+      rows.find((r) => r.group_folder === 'copilot-u-42')?.input_tokens,
+    ).toBe(900);
+  });
+
+  it('drops the recorded usage along with the session', () => {
+    setSession('copilot', 'sess-1', 'anthropic');
+    recordSessionUsage('copilot', 500);
+    deleteSession('copilot');
+
+    expect(
+      getSessionRows().find((r) => r.group_folder === 'copilot'),
+    ).toBeUndefined();
+  });
+
+  it('is a no-op for a session that does not exist', () => {
+    expect(() => recordSessionUsage('nope', 100)).not.toThrow();
+    expect(getSessionRows()).toHaveLength(0);
   });
 });

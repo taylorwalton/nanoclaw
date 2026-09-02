@@ -2,7 +2,12 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 
-import { createTask, getTaskById, getTasksForGroup } from '../db.js';
+import {
+  createTask,
+  getSessionRows,
+  getTaskById,
+  getTasksForGroup,
+} from '../db.js';
 import { logger } from '../logger.js';
 import {
   addLesson,
@@ -18,6 +23,11 @@ import { WEBHOOK_JID } from './webhook.js';
 import { Channel, RegisteredGroup } from '../types.js';
 
 const COPILOT_JID = process.env.COPILOT_JID || 'http:copilot';
+// Investigations run on their own lane: same group folder (same CLAUDE.md,
+// prompts and mounts) but a separate session that is never resumed and never
+// persisted. Keeps raw SIEM documents out of the analyst chat context, and
+// keeps one alert's findings from leaking into the next investigation.
+const COPILOT_INVESTIGATE_JID = `${COPILOT_JID}:investigate`;
 const COPILOT_GROUP_FOLDER = process.env.COPILOT_GROUP_FOLDER || 'copilot';
 const COPILOT_HTTP_PORT = parseInt(process.env.COPILOT_HTTP_PORT || '3100', 10);
 const HTTP_API_KEY = readEnvFile(['HTTP_API_KEY']).HTTP_API_KEY || '';
@@ -44,9 +54,12 @@ export class HttpChannel implements Channel {
   private startedAt = Date.now();
   private activeInvestigations = 0;
 
-  // FIFO queue: each POST /message enqueues a writer; setTyping(true) dequeues it
-  private pendingQueue: SseWriter[] = [];
-  private currentWriter: SseWriter | null = null;
+  // SSE writers are tracked per lane. A single global FIFO cannot correlate a
+  // response with the request that produced it: concurrent callers, or an
+  // investigation firing while an analyst has the chat open, would have their
+  // output written to whichever writer happened to be current.
+  private pending = new Map<string, SseWriter[]>();
+  private active = new Map<string, SseWriter>();
 
   constructor(opts: ChannelOpts) {
     this.opts = opts;
@@ -238,7 +251,25 @@ export class HttpChannel implements Channel {
         ],
       },
     };
-    this.opts.registerGroup?.(COPILOT_JID, group);
+    // Chat lane. trustedSessionCommands is safe here because every request to
+    // this server is rejected without HTTP_API_KEY (see the auth check below)
+    // and CoPilot's own route is scope-checked — a stronger guarantee than the
+    // is_from_me flag this would otherwise require.
+    this.opts.registerGroup?.(COPILOT_JID, {
+      ...group,
+      trustedSessionCommands: true,
+    });
+
+    // Investigation lane: same folder and mounts, separate ephemeral session.
+    // No trustedSessionCommands — nothing types slash commands at it.
+    this.opts.registerGroup?.(COPILOT_INVESTIGATE_JID, {
+      ...group,
+      name: 'CoPilot Investigations',
+      sessionKey: 'copilot-investigate',
+      ipcKey: 'copilot-investigate',
+      ephemeralSession: true,
+    });
+
     this.seedAlertDigestTask();
 
     this.opts.onChatMetadata(
@@ -269,13 +300,25 @@ export class HttpChannel implements Channel {
       if (req.method === 'GET' && req.url === '/status') {
         const tasks = getTasksForGroup(COPILOT_GROUP_FOLDER);
         const uptime = Math.floor((Date.now() - this.startedAt) / 1000);
+        // Lane context sizes, so CoPilot can show a session growing before it
+        // starts costing minutes per reply. The investigation lane is
+        // ephemeral and so never appears here — it has nothing stored.
+        const laneSessions = getSessionRows()
+          .filter((row) => row.group_folder.startsWith(COPILOT_GROUP_FOLDER))
+          .map((row) => ({
+            lane: row.group_folder,
+            session_id: row.session_id,
+            input_tokens: row.input_tokens,
+            updated_at: row.updated_at,
+          }));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
             status: 'ok',
             uptime_seconds: uptime,
             active_investigations: this.activeInvestigations,
-            pending_queue_depth: this.pendingQueue.length,
+            pending_queue_depth: (this.pending.get(COPILOT_JID) ?? []).length,
+            sessions: laneSessions,
             scheduled_tasks: tasks.map((t) => ({
               id: t.id,
               status: t.status,
@@ -286,6 +329,54 @@ export class HttpChannel implements Channel {
             })),
           }),
         );
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/session/reset') {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          let parsed: { scope?: string } = {};
+          if (body.trim()) {
+            try {
+              parsed = JSON.parse(body);
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Invalid JSON' }));
+              return;
+            }
+          }
+
+          const scope = parsed.scope || 'chat';
+          const targets: string[] =
+            scope === 'all'
+              ? [COPILOT_JID, COPILOT_INVESTIGATE_JID]
+              : scope === 'investigate'
+                ? [COPILOT_INVESTIGATE_JID]
+                : scope === 'chat'
+                  ? [COPILOT_JID]
+                  : [];
+
+          if (targets.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                error: "scope must be one of 'chat', 'investigate', 'all'",
+              }),
+            );
+            return;
+          }
+
+          const cleared = targets.filter(
+            (jid) => this.opts.clearSession?.(jid) === true,
+          );
+          logger.info({ scope, cleared }, 'HTTP channel: session reset');
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ cleared: cleared.length, lanes: cleared }));
+        });
         return;
       }
 
@@ -402,9 +493,9 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
 5. Write the eval JSON to /workspace/group/evals/${alert_id}-${jobId}.json as instructed in CLAUDE.md Step 6.
 6. Send the full investigation report via send_message.`;
 
-          this.opts.onMessage(COPILOT_JID, {
+          this.opts.onMessage(COPILOT_INVESTIGATE_JID, {
             id: `investigate-${jobId}`,
-            chat_jid: COPILOT_JID,
+            chat_jid: COPILOT_INVESTIGATE_JID,
             sender: 'copilot-webhook',
             sender_name: 'CoPilot',
             content: prompt,
@@ -744,7 +835,9 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
           // req.on('close') fires when the POST body is consumed (almost immediately).
           new Promise<void>((resolve) => {
             const writer: SseWriter = { res, resolve };
-            this.pendingQueue.push(writer);
+            const queue = this.pending.get(COPILOT_JID) ?? [];
+            queue.push(writer);
+            this.pending.set(COPILOT_JID, queue);
 
             // Start SSE keepalive immediately. The agent may take 30–90s to
             // boot the container + produce its first chunk; without periodic
@@ -762,9 +855,12 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
                 clearInterval(writer.keepalive);
                 writer.keepalive = undefined;
               }
-              const idx = this.pendingQueue.indexOf(writer);
-              if (idx !== -1) this.pendingQueue.splice(idx, 1);
-              if (this.currentWriter === writer) this.currentWriter = null;
+              const q = this.pending.get(COPILOT_JID);
+              const idx = q ? q.indexOf(writer) : -1;
+              if (q && idx !== -1) q.splice(idx, 1);
+              if (this.active.get(COPILOT_JID) === writer) {
+                this.active.delete(COPILOT_JID);
+              }
               resolve();
             });
 
@@ -812,6 +908,9 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
         );
         console.log(`  POST /palace/forget   { "drawer_id": "..." }`);
         console.log(`  GET  /status`);
+        console.log(
+          `  POST /session/reset { "scope": "chat|investigate|all" }`,
+        );
         console.log(`  GET  /health\n`);
         resolve();
       });
@@ -819,67 +918,79 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
     });
   }
 
-  async sendMessage(_jid: string, text: string): Promise<void> {
-    if (!this.currentWriter) {
-      logger.warn('HTTP channel: sendMessage called with no active SSE writer');
+  /** Close and release the lane's active writer, if it has one. */
+  private closeWriter(jid: string, reason: string): void {
+    const writer = this.active.get(jid);
+    if (!writer) return;
+    if (writer.keepalive) {
+      clearInterval(writer.keepalive);
+      writer.keepalive = undefined;
+    }
+    const event = JSON.stringify({ type: 'done' });
+    writer.res.write(`data: ${event}\n\n`);
+    writer.res.end();
+    writer.resolve();
+    this.active.delete(jid);
+    logger.info({ jid, reason }, 'HTTP channel: SSE stream closed');
+  }
+
+  async sendMessage(jid: string, text: string): Promise<void> {
+    const writer = this.active.get(jid);
+    if (!writer) {
+      // Expected on the investigation lane: its results reach CoPilot through
+      // the MCP write-back tools, not over SSE. Never fall back to another
+      // lane's writer — that is exactly the cross-talk this map prevents.
+      logger.debug(
+        { jid, length: text.length },
+        'HTTP channel: no SSE writer for lane, dropping chunk',
+      );
       return;
     }
     const event = JSON.stringify({ type: 'text', content: text });
-    this.currentWriter.res.write(`data: ${event}\n\n`);
-    logger.info({ length: text.length }, 'HTTP channel: wrote SSE text chunk');
+    writer.res.write(`data: ${event}\n\n`);
+    logger.info(
+      { jid, length: text.length },
+      'HTTP channel: wrote SSE text chunk',
+    );
   }
 
-  async setTyping(_jid: string, isTyping: boolean): Promise<void> {
+  async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (isTyping) {
       this.activeInvestigations++;
-      // Agent is starting — dequeue the next waiting SSE writer
-      if (this.pendingQueue.length > 0) {
-        this.currentWriter = this.pendingQueue.shift()!;
+      // Agent is starting — dequeue the next writer waiting on THIS lane.
+      const queue = this.pending.get(jid);
+      if (queue && queue.length > 0) {
+        this.active.set(jid, queue.shift()!);
         logger.info(
-          { remainingQueue: this.pendingQueue.length },
+          { jid, remainingQueue: queue.length },
           'HTTP channel: dequeued SSE writer',
         );
       } else {
-        logger.warn('HTTP channel: setTyping(true) but no pending SSE writer');
+        logger.debug(
+          { jid },
+          'HTTP channel: setTyping(true) with no pending SSE writer',
+        );
       }
     } else {
       // setTyping(false) fires when the container exits (~30 min idle timeout).
       // onTurnComplete already closed the stream when the agent finished the turn.
       // This is just a safety net in case onTurnComplete wasn't called.
       this.activeInvestigations = Math.max(0, this.activeInvestigations - 1);
-      if (this.currentWriter) {
+      if (this.active.has(jid)) {
         logger.warn(
+          { jid },
           'HTTP channel: setTyping(false) called with active writer — closing via safety net',
         );
-        if (this.currentWriter.keepalive) {
-          clearInterval(this.currentWriter.keepalive);
-          this.currentWriter.keepalive = undefined;
-        }
-        const event = JSON.stringify({ type: 'done' });
-        this.currentWriter.res.write(`data: ${event}\n\n`);
-        this.currentWriter.res.end();
-        this.currentWriter.resolve();
-        this.currentWriter = null;
+        this.closeWriter(jid, 'idle-timeout');
       }
     }
   }
 
-  async onTurnComplete(_jid: string): Promise<void> {
+  async onTurnComplete(jid: string): Promise<void> {
     // Called when result.status === 'success' — close the SSE stream immediately
     // rather than waiting for the container's idle timeout.
     this.activeInvestigations = Math.max(0, this.activeInvestigations - 1);
-    if (this.currentWriter) {
-      if (this.currentWriter.keepalive) {
-        clearInterval(this.currentWriter.keepalive);
-        this.currentWriter.keepalive = undefined;
-      }
-      const event = JSON.stringify({ type: 'done' });
-      this.currentWriter.res.write(`data: ${event}\n\n`);
-      this.currentWriter.res.end();
-      this.currentWriter.resolve();
-      this.currentWriter = null;
-      logger.info('HTTP channel: SSE stream closed (turn complete)');
-    }
+    this.closeWriter(jid, 'turn-complete');
   }
 
   isConnected(): boolean {
@@ -887,7 +998,7 @@ ${stepOverrideInstruction}4. Write back to CoPilot — call these three tools in
   }
 
   ownsJid(jid: string): boolean {
-    return jid === COPILOT_JID;
+    return jid === COPILOT_JID || jid.startsWith(`${COPILOT_JID}:`);
   }
 
   async disconnect(): Promise<void> {
